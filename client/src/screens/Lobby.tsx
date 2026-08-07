@@ -8,18 +8,26 @@ export function Lobby({
   onLeave,
   onKick,
   onStart,
+  notice,
 }: {
   room: RoomStateMsg;
   me: PublicPlayer | null;
   onLeave: () => void;
   onKick: (playerId: string) => void;
   onStart: () => void;
+  notice: string | null;
 }) {
   const joinUrl = `${location.origin}/?c=${room.code}`;
   const isHost = me?.isHost ?? false;
 
   return (
     <main className="screen screen--lobby">
+      {notice && (
+        <p className="notice" role="status">
+          {notice}
+        </p>
+      )}
+
       <section className="join-card">
         <p className="join-card__hint">Join at <strong>{location.host}</strong> with code</p>
         <p className="code" aria-label={`Room code ${room.code.split('').join(' ')}`}>

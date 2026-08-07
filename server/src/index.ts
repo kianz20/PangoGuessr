@@ -5,23 +5,61 @@ import express from 'express';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { isValidCode } from '@pangoguessr/shared';
 import type { ClientMessage, ServerMessage } from '@pangoguessr/shared';
+import { loadDotEnv } from './env';
+import { createLocationSource } from './locationSource';
 import { RoomStore, type Conn } from './rooms';
+
+loadDotEnv();
 
 const PORT = Number(process.env.PORT ?? 3000);
 const IS_PROD = process.env.NODE_ENV === 'production';
+/** Unrestricted, server-side only, used for metadata calls. Never reaches the client (§7). */
+const SERVER_KEY = process.env.GOOGLE_MAPS_SERVER_KEY;
+/** Public by nature; an HTTP-referrer restriction is what protects it (§7). */
+const BROWSER_KEY = process.env.GOOGLE_MAPS_BROWSER_KEY ?? '';
 
-const store = new RoomStore();
+const locations = createLocationSource(SERVER_KEY);
 const app = express();
 const server = createServer(app);
+
+/**
+ * Instrumentation (§7): panorama loads should track at roughly `rounds × players`. If the
+ * ratio drifts above that, something is re-initialising the viewer — and you see it in a log
+ * line rather than a month-end invoice.
+ */
+const usage = { roundsStarted: 0, playerRounds: 0, gamesStarted: 0 };
+
+const store = new RoomStore(undefined, locations, (room, playerCount) => {
+  usage.roundsStarted++;
+  usage.playerRounds += playerCount;
+  console.log(
+    `[room ${room.code}] round ${room.roundIndex + 1} — ${playerCount} players, ` +
+      `${usage.playerRounds} panorama loads this boot`,
+  );
+});
 
 app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
     rooms: store.roomCount,
     uptimeSeconds: Math.round(process.uptime()),
+    usage: {
+      ...usage,
+      // The number that actually bills. Compare against the free allowance (~10k/month).
+      estimatedPanoramaLoads: usage.playerRounds,
+    },
+    locations: locations.stats(),
     // Never in production: player names are more than a health check needs to expose.
     ...(IS_PROD ? {} : { detail: store.describe() }),
   });
+});
+
+/**
+ * The browser key is served at runtime rather than baked into the bundle, so one build works
+ * with or without imagery configured — and swapping the key doesn't need a rebuild.
+ */
+app.get('/api/config', (_req, res) => {
+  res.json({ mapsBrowserKey: BROWSER_KEY, imagery: BROWSER_KEY ? 'streetview' : 'placeholder' });
 });
 
 // Client and API share an origin in prod (§2), so there's no CORS or cross-site cookie
@@ -131,7 +169,10 @@ function handleMessage(conn: Conn, msg: ClientMessage): void {
         conn.send({ type: 'error', code: result.code, message: result.message });
         return;
       }
-      console.log(`[room ${result.room.code}] round 1 started`);
+      usage.gamesStarted++;
+      console.log(
+        `[room ${result.room.code}] game started — ${result.room.deck.map((l) => l.name).join(', ')}`,
+      );
       return;
     }
 

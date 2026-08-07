@@ -26,7 +26,11 @@ import type {
   RoundSnapshot,
   ServerMessage,
 } from '@pangoguessr/shared';
-import { dealLocations, type FixedLocation } from './locations';
+import {
+  FixedLocationSource,
+  type LocationSource,
+  type RoundLocation,
+} from './locationSource';
 
 /**
  * The transport, narrowed to what the store needs. Keeps `ws` out of the game logic so
@@ -56,10 +60,12 @@ export type Guess = {
 
 export type ActiveRound = {
   index: number;
-  location: FixedLocation;
+  location: RoundLocation;
   /**
-   * What the client renders. A placeholder token until step 3 resolves real Street View
-   * panorama IDs — the answer coordinates never travel with it either way (§3).
+   * What the client renders. The server resolves this before broadcasting, so all players
+   * are guaranteed the same panorama — no per-client coordinate resolution, no drift where
+   * two people see different images of the same "location" (§7). The answer coordinates
+   * never travel with it (§3).
    */
   panoId: string;
   startedAt: number;
@@ -79,7 +85,7 @@ export type Room = {
   /** When the room last had zero connected players, for the 10-minute reap (§8). */
   emptySince: number | null;
   /** Locations for this game, dealt at startRound so a game never repeats one. */
-  deck: FixedLocation[];
+  deck: RoundLocation[];
   round: ActiveRound | null;
   /** Kept so a player reconnecting into ROUND_RESULTS or GAME_OVER sees the screen (§4). */
   lastMessage: ServerMessage | null;
@@ -109,7 +115,12 @@ export class RoomStore {
   /** Reverse index so a socket closing can be resolved without scanning every room. */
   private readonly connIndex = new Map<Conn, { code: string; playerId: string }>();
 
-  constructor(private readonly scheduler: Scheduler = realScheduler) {}
+  constructor(
+    private readonly scheduler: Scheduler = realScheduler,
+    private readonly locations: LocationSource = new FixedLocationSource(),
+    /** Hook for usage instrumentation — every round begun bills one load per player (§7). */
+    private readonly onRoundBegan?: (room: Room, playerCount: number) => void,
+  ) {}
 
   get roomCount(): number {
     return this.rooms.size;
@@ -255,7 +266,14 @@ export class RoomStore {
     if (!player.isHost) return fail('NOT_HOST', 'Only the host can start the game.');
     if (room.phase !== 'LOBBY') return fail('WRONG_PHASE', 'The game has already started.');
 
-    room.deck = dealLocations(ROUNDS_PER_GAME);
+    const deck = this.locations.take(ROUNDS_PER_GAME);
+    if (!deck) {
+      // The pool is still filling. Better an honest "try again in a moment" than a Start
+      // button that hangs while metadata round-trips happen (§7).
+      return fail('LOCATIONS_NOT_READY', 'Still finding locations — try again in a few seconds.');
+    }
+
+    room.deck = deck;
     for (const p of room.players.values()) p.score = 0;
     this.beginRound(room, 0, now);
     return { ok: true, room, player };
@@ -339,7 +357,7 @@ export class RoomStore {
     room.round = {
       index,
       location,
-      panoId: `dev:${location.id}`,
+      panoId: location.panoId,
       startedAt: now,
       // One authoritative timer for the room, so a player who never finishes loading can't
       // stall everyone else (§5).
@@ -355,6 +373,7 @@ export class RoomStore {
     });
     this.broadcastState(room);
     this.touch(room, now);
+    this.onRoundBegan?.(room, connectedCount(room));
   }
 
   /**

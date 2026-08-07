@@ -70,6 +70,7 @@ export default function App() {
           <Lobby
             room={room}
             me={me}
+            notice={notice}
             onLeave={leaveRoom}
             onKick={kick}
             onStart={startRound}

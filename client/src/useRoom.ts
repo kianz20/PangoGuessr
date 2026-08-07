@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { LOAD_HEADROOM_MS, ROUND_MS } from '@pangoguessr/shared';
 import type {
   ClientMessage,
+  ErrorCode,
   LatLng,
   LeaderboardRow,
   RoomStateMsg,
@@ -212,6 +213,17 @@ export function useRoom() {
       }
 
       if (msg.type === 'error') {
+        // Only errors that mean "you are not in a room" send you home. A transient one — the
+        // location pool still filling, a stale button press — must never eject the host from
+        // their own room; it's a message on the screen they're already on.
+        const FATAL: ErrorCode[] = [
+          'ROOM_NOT_FOUND',
+          'ROOM_FULL',
+          'NAME_TAKEN',
+          'NAME_INVALID',
+          'CODE_INVALID',
+        ];
+
         if (msg.code === 'ROOM_LOCKED') {
           // Hold them rather than bouncing them; they're admitted automatically once the
           // room returns to LOBBY (§4).
@@ -226,7 +238,12 @@ export function useRoom() {
           }, LOCKED_RETRY_MS);
           return;
         }
-        goHome(msg.message);
+
+        if (FATAL.includes(msg.code)) {
+          goHome(msg.message);
+          return;
+        }
+        setNotice(msg.message);
       }
     };
 

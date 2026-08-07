@@ -16,3 +16,9 @@ services:
         value: production # without this the server won't serve client/dist
       - key: NODE_VERSION
         value: "20"
+      # sync: false = set these in the dashboard, never in the repo. Without them the game
+      # falls back to the fixed location list and the placeholder viewer (§7).
+      - key: GOOGLE_MAPS_SERVER_KEY
+        sync: false
+      - key: GOOGLE_MAPS_BROWSER_KEY
+        sync: false

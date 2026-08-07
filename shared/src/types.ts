@@ -70,6 +70,7 @@ export type ErrorCode =
   | 'CODE_INVALID'
   | 'NOT_HOST'
   | 'WRONG_PHASE'
+  | 'LOCATIONS_NOT_READY'
   | 'BAD_MESSAGE';
 
 export type ClientMessage =

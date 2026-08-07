@@ -3,13 +3,38 @@
 A GeoGuessr-style party game for a room full of phones. See [ARCHITECTURE.md](ARCHITECTURE.md)
 for the design and the reasoning behind it — this file is just how to run it.
 
-**Status:** steps 1–2 of the build order (§10). Playable end to end: lobby → 5 rounds →
+**Status:** steps 1–3 of the build order (§10). Playable end to end: lobby → 5 rounds →
 host-gated results → podium → play again, with reconnect at every phase.
 
-The panorama is a **placeholder**. Step 3 swaps it for real Street View plus weighted zone
-sampling — until then rounds run off the hardcoded list in
-[server/src/locations.ts](server/src/locations.ts), and the guess map, both clocks, scoring
-and the reveal are all real.
+Imagery is **key-gated**. With `GOOGLE_MAPS_*` keys set you get real Street View sampled from
+the weighted zones in [server/src/zones.ts](server/src/zones.ts); without them the game falls
+back to the fixed list in [server/src/locations.ts](server/src/locations.ts) and a placeholder
+viewer, so it stays fully runnable and testable with no billing account attached.
+
+## Enabling Street View
+
+**Set the quota cap before the first real panorama load, not after.** Normal play uses ~16% of
+the free allowance and will never threaten it — the risk is a bug (a remount loop, a reconnect
+storm) burning thousands of loads with no visible symptom (§7).
+
+1. Google Cloud Console → new project → **enable billing** (required even on free usage).
+2. **APIs & Services → Enable**: *Maps JavaScript API* and *Street View Static API* (the
+   latter is what serves metadata).
+3. **APIs & Services → Street View Static API → Quotas** → set the daily metadata/panorama
+   limit to **300/day**. Roughly 4 games, comfortably above any real session, and it keeps
+   even a runaway loop inside the monthly free allowance. This is the only thing that actually
+   stops spend — budget alerts just email you afterwards.
+4. **Billing → Budgets & alerts**: alerts at **$5** and **$20**.
+5. **Credentials → two API keys**:
+   - *Browser key* — restrict by **HTTP referrer** to your Render domain (and
+     `http://localhost:5173/*` for local work). Restrict to Maps JavaScript API.
+   - *Server key* — no referrer restriction, restricted to Street View Static API.
+6. Locally: `cp .env.example .env` and fill both in. On Render: add
+   `GOOGLE_MAPS_SERVER_KEY` and `GOOGLE_MAPS_BROWSER_KEY` as environment variables.
+
+Check it took effect at `/api/health` — `locations.source` flips from `fixed` to `streetview`,
+and `usage.estimatedPanoramaLoads` should track at roughly `rounds × players`. If that ratio
+drifts upward, something is re-initialising the viewer.
 
 ## Running it
 
@@ -63,7 +88,7 @@ it: by the time the QR is up, the service is awake.
 ## Testing
 
 ```bash
-npm test        # 26 unit tests: rooms (reconnect, host drop, reaping) + rounds (timers, scoring)
+npm test        # 40 unit tests: rooms, rounds/timers/scoring, zone sampling and the pool
 npm run smoke   # 63 end-to-end checks over real WebSockets; needs a server running
 node server/test/smoke-game.mjs 3200       # ...or a single suite against another port
 ```

@@ -18,7 +18,8 @@
     "start": "node server/dist/index.js",
     "test": "npm run test --workspace server",
     "smoke": "npm run smoke --workspace server && npm run smoke:game --workspace server",
-    "typecheck": "npm run typecheck --workspace shared && npm run typecheck --workspace server && npm run typecheck --workspace client"
+    "typecheck": "npm run typecheck --workspace shared && npm run typecheck --workspace server && npm run typecheck --workspace client",
+    "check:imagery": "npm run check:imagery --workspace server"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",
