@@ -1,0 +1,326 @@
+/* Portrait phone is the design target (§12). Everything here is built for a thumb. */
+:root {
+  --bg: #0f1720;
+  --surface: #17222e;
+  --surface-2: #1e2b3a;
+  --line: #2a3a4d;
+  --text: #eef4fa;
+  --muted: #93a6bb;
+  --accent: #35d39a;
+  --accent-ink: #06281d;
+  --warn: #f0b542;
+  --danger: #ef6b6b;
+  --radius: 14px;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+
+#root {
+  min-height: 100dvh;
+}
+
+.screen {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 460px;
+  margin: 0 auto;
+  padding: max(24px, env(safe-area-inset-top)) 20px max(24px, env(safe-area-inset-bottom));
+  min-height: 100dvh;
+}
+
+.screen--home,
+.screen--status {
+  justify-content: center;
+}
+
+.screen--status {
+  align-items: center;
+  text-align: center;
+}
+
+.brand h1 {
+  margin: 0;
+  font-size: 2rem;
+  letter-spacing: -0.02em;
+}
+
+.brand__tag {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+
+.notice {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--warn) 16%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field__label {
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.input {
+  width: 100%;
+  padding: 14px 16px;
+  font-size: 1.05rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.input--code {
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: 0.35em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.button {
+  padding: 15px 18px;
+  font: inherit;
+  font-weight: 600;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.button--primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.button--ghost {
+  background: transparent;
+  color: var(--text);
+  border-color: var(--line);
+}
+
+.button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.or {
+  color: var(--muted);
+  text-align: center;
+  font-size: 0.85rem;
+}
+
+/* Lobby */
+.join-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+}
+
+.join-card__hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.code {
+  margin: 0;
+  font-size: 3rem;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  /* Read aloud across a room, so the glyphs need to be unmistakable (§8). */
+  font-variant-numeric: slashed-zero tabular-nums;
+  text-indent: 0.22em;
+}
+
+.qr {
+  display: block;
+  border-radius: 10px;
+  background: #fff;
+  padding: 6px;
+}
+
+.qr--placeholder {
+  background: var(--surface-2);
+}
+
+.players {
+  flex: 1;
+}
+
+.players__title {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin: 0 0 10px;
+  font-size: 1rem;
+}
+
+.players__count {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.players__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.player {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.player--away {
+  opacity: 0.6;
+}
+
+.player__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.player__you {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.player__status {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.player__kick {
+  background: none;
+  border: 0;
+  color: var(--danger);
+  font-size: 1rem;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.dot--on {
+  background: var(--accent);
+}
+
+.dot--off {
+  background: var(--muted);
+}
+
+.badge {
+  padding: 2px 8px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 999px;
+}
+
+.lobby__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.hint--warn {
+  color: var(--warn);
+}
+
+/* Status screens */
+.status__title {
+  margin: 0;
+  font-size: 1.4rem;
+}
+
+.status__body {
+  margin: 0;
+  color: var(--muted);
+  max-width: 28ch;
+}
+
+.spinner {
+  width: 34px;
+  height: 34px;
+  border: 3px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 3s;
+  }
+}

@@ -1,0 +1,3 @@
+# This repo gets touched from both WSL and Windows tooling. Normalise to LF in the object
+# store so the two don't produce phantom whole-file diffs against each other.
+* text=auto eol=lf

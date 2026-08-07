@@ -1,0 +1,18 @@
+# Render blueprint (§9). One web service: the server serves the client build and handles
+# the WebSocket upgrade on the same port, so there's no CORS and no separate WS host.
+services:
+  - type: web
+    name: pangoguessr
+    runtime: node
+    plan: free
+    region: singapore # closest Render region to NZ
+    # `--include=dev` is load-bearing: NODE_ENV=production below applies to the build too,
+    # and npm then skips devDependencies — which is where vite and esbuild live.
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production # without this the server won't serve client/dist
+      - key: NODE_VERSION
+        value: "20"
