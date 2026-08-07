@@ -7,11 +7,13 @@ export function Lobby({
   me,
   onLeave,
   onKick,
+  onStart,
 }: {
   room: RoomStateMsg;
   me: PublicPlayer | null;
   onLeave: () => void;
   onKick: (playerId: string) => void;
+  onStart: () => void;
 }) {
   const joinUrl = `${location.origin}/?c=${room.code}`;
   const isHost = me?.isHost ?? false;
@@ -58,11 +60,13 @@ export function Lobby({
       <footer className="lobby__actions">
         {isHost ? (
           <>
-            {/* Enabled in step 2 (§10) — the round loop doesn't exist yet. */}
-            <button className="button button--primary" type="button" disabled>
+            <button className="button button--primary" type="button" onClick={onStart}>
               Start game
             </button>
-            <p className="hint">The round loop lands next. Lobby, reconnect and QR first.</p>
+            <p className="hint">
+              {room.totalRounds} rounds. The room locks once you start — nobody can join
+              until it’s over.
+            </p>
           </>
         ) : (
           <p className="hint">Waiting for the host to start.</p>

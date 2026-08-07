@@ -1,6 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ClientMessage, RoomStateMsg, ServerMessage } from '@pangoguessr/shared';
+import { LOAD_HEADROOM_MS, ROUND_MS } from '@pangoguessr/shared';
+import type {
+  ClientMessage,
+  LatLng,
+  LeaderboardRow,
+  RoomStateMsg,
+  ServerMessage,
+} from '@pangoguessr/shared';
 import { forgetRoom, getSessionId, recallRoom, rememberRoom } from './session';
+
+export type RoundView = {
+  index: number;
+  panoId: string;
+  /** The player's own clock, which starts when their panorama renders (§5). */
+  durationMs: number;
+  /** Left on the room's backstop when we learned about the round — bounds the above. */
+  remainingMs: number;
+  youGuessed: boolean;
+};
+
+export type ResultsView = Extract<ServerMessage, { type: 'roundEnd' }>;
 
 export type Status =
   | 'home'
@@ -28,6 +47,9 @@ export function useRoom() {
   const [status, setStatus] = useState<Status>('home');
   const [room, setRoom] = useState<RoomStateMsg | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [round, setRound] = useState<RoundView | null>(null);
+  const [results, setResults] = useState<ResultsView | null>(null);
+  const [finalBoard, setFinalBoard] = useState<LeaderboardRow[] | null>(null);
 
   const socketRef = useRef<WebSocket | null>(null);
   const intentRef = useRef<Intent | null>(null);
@@ -111,6 +133,59 @@ export function useRoom() {
         // Promote a create into a join, so any later reconnect targets this room.
         intentRef.current = { kind: 'join', code: msg.code, name: me?.name ?? '' };
         if (me) rememberRoom({ code: msg.code, name: me.name });
+
+        if (msg.round) {
+          // Reconnecting into a live round: adopt it without restarting the player's clock
+          // if it's the round we were already on (§4).
+          const snapshot = msg.round;
+          setRound((prev) =>
+            prev && prev.index === snapshot.index
+              ? { ...prev, youGuessed: snapshot.youGuessed }
+              : {
+                  index: snapshot.index,
+                  panoId: snapshot.panoId,
+                  durationMs: ROUND_MS,
+                  remainingMs: snapshot.remainingMs,
+                  youGuessed: snapshot.youGuessed,
+                },
+          );
+        }
+        if (msg.phase === 'LOBBY') {
+          setRound(null);
+          setResults(null);
+          setFinalBoard(null);
+        }
+        return;
+      }
+
+      if (msg.type === 'roundStart') {
+        setResults(null);
+        setFinalBoard(null);
+        setRound({
+          index: msg.roundIndex,
+          panoId: msg.panoId,
+          durationMs: msg.durationMs,
+          remainingMs: msg.durationMs + LOAD_HEADROOM_MS,
+          youGuessed: false,
+        });
+        return;
+      }
+
+      if (msg.type === 'guessAck') {
+        setRound((prev) => (prev ? { ...prev, youGuessed: true } : prev));
+        return;
+      }
+
+      if (msg.type === 'roundEnd') {
+        setResults(msg);
+        setRound(null);
+        return;
+      }
+
+      if (msg.type === 'gameEnd') {
+        setFinalBoard(msg.leaderboard);
+        setResults(null);
+        setRound(null);
         return;
       }
 
@@ -181,8 +256,36 @@ export function useRoom() {
     goHome(null);
   }, [goHome, send]);
   const kick = useCallback((playerId: string) => send({ type: 'kick', playerId }), [send]);
+  const startRound = useCallback(() => send({ type: 'startRound' }), [send]);
+  const advance = useCallback(() => send({ type: 'advance' }), [send]);
+
+  const submitGuess = useCallback(
+    (at: LatLng, elapsedMs: number) => {
+      // Optimistic: the round's waiting screen should appear on tap, not a round trip later.
+      // The server ignores duplicates, so a racing auto-submit is harmless (§5).
+      setRound((prev) => (prev ? { ...prev, youGuessed: true } : prev));
+      send({ type: 'submitGuess', lat: at.lat, lng: at.lng, elapsedMs });
+    },
+    [send],
+  );
 
   const me = room?.players.find((p) => p.id === room.youId) ?? null;
 
-  return { status, room, me, notice, createRoom, joinRoom, leaveRoom, kick, setNotice };
+  return {
+    status,
+    room,
+    me,
+    notice,
+    round,
+    results,
+    finalBoard,
+    createRoom,
+    joinRoom,
+    leaveRoom,
+    kick,
+    startRound,
+    advance,
+    submitGuess,
+    setNotice,
+  };
 }

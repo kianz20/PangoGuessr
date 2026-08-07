@@ -97,14 +97,27 @@ lost.send({ type: 'join', code: 'ZZZZ', displayName: 'Nobody', sessionId: 'smoke
 const lostErr = await lost.waitFor('error');
 check(lostErr.code === 'ROOM_NOT_FOUND', `unknown room rejected (${lostErr.code})`);
 
-log('\n6. rounds are not implemented yet (step 2)');
+log('\n6. starting the game locks the room to new players');
 host.send({ type: 'startRound' });
-const notYet = await host.waitFor('error');
-check(notYet.code === 'BAD_MESSAGE', `startRound refused: "${notYet.message}"`);
+await host.waitFor('roundStart');
+const late = client('late');
+await late.open;
+late.send({ type: 'join', code, displayName: 'Late', sessionId: 'smoke-late' });
+const lockedErr = await late.waitFor('error');
+check(lockedErr.code === 'ROOM_LOCKED', `latecomer held out (${lockedErr.code})`);
+// A known sessionId is restoring a player, not joining, so it must still get through (§4).
+const rejoin = client('rejoin');
+await rejoin.open;
+rejoin.send({ type: 'join', code, displayName: 'Kian', sessionId: 'smoke-guest' });
+const rejoined = await rejoin.waitFor('roomState');
+check(rejoined.phase === 'ROUND_ACTIVE', 'reconnect gets through the lock, mid-round');
+check(!!rejoined.round && rejoined.round.remainingMs > 0, 'and is handed the live round');
 
 log('\n7. the host leaving closes the room for everyone');
 host.send({ type: 'leave' });
-const closed = await guestBack.waitFor('roomClosed');
+// Watch `rejoin`, not `guestBack`: step 6 reconnected that sessionId, and the newest socket
+// wins — the older one is deliberately dropped, so it receives nothing further.
+const closed = await rejoin.waitFor('roomClosed');
 check(closed.reason === 'hostLeft', `guest told the room closed (${closed.reason})`);
 const after = await fetch(`${HTTP}/api/health`).then((r) => r.json());
 check(after.rooms === health.rooms, `room count back to ${health.rooms}`);

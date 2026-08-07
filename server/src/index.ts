@@ -104,6 +104,8 @@ function handleMessage(conn: Conn, msg: ClientMessage): void {
         `[room ${result.room.code}] ${result.player.name} joined (${result.room.players.size} players)`,
       );
       store.broadcastState(result.room);
+      // Mid-results or mid-podium, the state alone isn't enough to draw the screen (§4).
+      store.replayPhase(result.room, result.player);
       return;
     }
 
@@ -123,15 +125,32 @@ function handleMessage(conn: Conn, msg: ClientMessage): void {
       return;
     }
 
-    // Step 2 (§10). The host's Start button stays disabled until these exist.
-    case 'startRound':
-    case 'advance':
+    case 'startRound': {
+      const result = store.startRound(conn);
+      if (!result.ok) {
+        conn.send({ type: 'error', code: result.code, message: result.message });
+        return;
+      }
+      console.log(`[room ${result.room.code}] round 1 started`);
+      return;
+    }
+
     case 'submitGuess': {
-      conn.send({
-        type: 'error',
-        code: 'BAD_MESSAGE',
-        message: 'Rounds aren’t implemented yet — lobby only for now.',
-      });
+      const result = store.submitGuess(conn, msg.lat, msg.lng, msg.elapsedMs);
+      if (!result.ok) {
+        conn.send({ type: 'error', code: result.code, message: result.message });
+      }
+      return;
+    }
+
+    case 'advance': {
+      const result = store.advance(conn);
+      if (!result.ok) {
+        conn.send({ type: 'error', code: result.code, message: result.message });
+        return;
+      }
+      // beginRound broadcasts its own state; a return to LOBBY needs one.
+      if (result.room.phase === 'LOBBY') store.broadcastState(result.room);
       return;
     }
 

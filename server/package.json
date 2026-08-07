@@ -7,8 +7,9 @@
     "dev": "tsx watch src/index.ts",
     "build": "esbuild src/index.ts --bundle --platform=node --target=node18 --format=esm --outfile=dist/index.js --external:express --external:ws --banner:js=\"import{createRequire}from'module';const require=createRequire(import.meta.url);\"",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node --test --import tsx test/rooms.test.ts",
-    "smoke": "node test/smoke.mjs"
+    "test": "node --test --import tsx test/rooms.test.ts test/rounds.test.ts",
+    "smoke": "node test/smoke.mjs",
+    "smoke:game": "node test/smoke-game.mjs"
   },
   "dependencies": {
     "@pangoguessr/shared": "*",
