@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import type { LatLng } from '@pangoguessr/shared';
+import { GUESS_PIN } from './mapPin';
 
 const OSM_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 const OSM_ATTRIBUTION = '© OpenStreetMap';
@@ -66,7 +67,7 @@ export function GuessMap({
       return;
     }
     if (markerRef.current) markerRef.current.setLatLng(pin);
-    else markerRef.current = L.marker(pin, { keyboard: false }).addTo(map);
+    else markerRef.current = L.marker(pin, { icon: GUESS_PIN, keyboard: false }).addTo(map);
   }, [pin]);
 
   return (

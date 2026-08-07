@@ -182,6 +182,11 @@ test('only the host can kick', () => {
 
   assert.ok(store.kick(hostConn, guestB.player.id).ok);
   assert.equal(room.players.size, 2);
+
+  // Being removed is not the same event as the room closing, and the player is told which.
+  const told = b.lastOfType('roomClosed');
+  assert.ok(told && told.type === 'roomClosed');
+  assert.equal(told.reason, 'kicked');
 });
 
 test('broadcast state never leaks sessionId', () => {

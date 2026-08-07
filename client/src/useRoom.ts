@@ -84,6 +84,17 @@ export function useRoom() {
 
   const connect = useCallback(() => {
     if (!intentRef.current) return;
+    // Never open a second socket. The server treats a second connection on the same
+    // sessionId as a reconnect and closes the first, whose `onclose` then reconnects — a
+    // 2-second churn that silently drops broadcasts, because a message sent to a closing
+    // socket is discarded. StrictMode's double-mount is enough to start it.
+    const existing = socketRef.current;
+    if (
+      existing &&
+      (existing.readyState === WebSocket.CONNECTING || existing.readyState === WebSocket.OPEN)
+    ) {
+      return;
+    }
     closingRef.current = false;
 
     const socket = new WebSocket(socketUrl());
@@ -193,7 +204,9 @@ export function useRoom() {
         goHome(
           msg.reason === 'hostLeft'
             ? 'The host left, so the room closed.'
-            : 'That room was closed after sitting idle.',
+            : msg.reason === 'kicked'
+              ? 'The host removed you from the room.'
+              : 'That room was closed after sitting idle.',
         );
         return;
       }
@@ -218,6 +231,9 @@ export function useRoom() {
     };
 
     socket.onclose = () => {
+      // Only if this is still the live socket. A stale socket closing late would otherwise
+      // null out the reference to the good one and restart the very churn fixed above.
+      if (socketRef.current !== socket) return;
       socketRef.current = null;
       if (closingRef.current || !intentRef.current) return;
       // Phones drop sockets constantly — screen lock, backgrounding, WiFi handoff. Keep
@@ -230,6 +246,11 @@ export function useRoom() {
   const start = useCallback(
     (intent: Intent) => {
       clearTimers();
+      // A new intent means a different room, so drop any existing socket deliberately
+      // rather than letting connect()'s guard reuse it.
+      closingRef.current = true;
+      socketRef.current?.close();
+      socketRef.current = null;
       intentRef.current = intent;
       setNotice(null);
       setStatus('connecting');
@@ -242,9 +263,41 @@ export function useRoom() {
   useEffect(() => {
     const last = recallRoom();
     if (last) start({ kind: 'join', code: last.code, name: last.name });
-    return clearTimers;
+    return () => {
+      // Closing on unmount is what makes StrictMode's double-mount harmless: the first
+      // socket goes away before the second is opened, so the server never sees two.
+      closingRef.current = true;
+      clearTimers();
+      socketRef.current?.close();
+      socketRef.current = null;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /**
+   * The phase is authoritative, but the payload that draws the screen arrives as a separate
+   * message — so anything that loses one message strands the UI on a spinner forever. Ask
+   * again until it turns up. `join` is idempotent for a known sessionId and replays the
+   * current phase, so no extra message type is needed.
+   */
+  const phase = room?.phase;
+  const missingPayload =
+    (phase === 'ROUND_RESULTS' && !results) || (phase === 'GAME_OVER' && !finalBoard);
+
+  useEffect(() => {
+    if (!missingPayload) return;
+    const resync = window.setInterval(() => {
+      const intent = intentRef.current;
+      if (intent?.kind !== 'join') return;
+      send({
+        type: 'join',
+        code: intent.code,
+        displayName: intent.name,
+        sessionId: getSessionId(),
+      });
+    }, 1_500);
+    return () => window.clearInterval(resync);
+  }, [missingPayload, send]);
 
   const createRoom = useCallback((name: string) => start({ kind: 'create', name }), [start]);
   const joinRoom = useCallback(

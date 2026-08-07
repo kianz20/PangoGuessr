@@ -443,6 +443,31 @@ body {
   font-size: 1.35rem;
 }
 
+/* A CSS teardrop, so there is no image asset for a bundler to fail to serve. */
+.pin-marker {
+  background: none;
+  border: 0;
+}
+
+.pin-marker__body {
+  display: block;
+  width: 24px;
+  height: 24px;
+  background: #e23b3b;
+  border: 2px solid #fff;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+  box-shadow: 0 2px 6px rgb(0 0 0 / 45%);
+}
+
+.pin-marker__body::after {
+  content: '';
+  position: absolute;
+  inset: 7px;
+  background: #fff;
+  border-radius: 50%;
+}
+
 .pin-label {
   background: var(--surface);
   color: var(--text);

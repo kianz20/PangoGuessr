@@ -285,6 +285,40 @@ test('reconnecting mid-round restores the round, mid-results restores the result
   assert.ok(backResults.lastOfType('roundEnd'), 'gets the results screen, not a blank one');
 });
 
+test('a client that missed roundEnd can recover it by re-joining', () => {
+  // The UI is driven by the phase, but drawn from the payload. If a socket misses the
+  // roundEnd broadcast, re-sending `join` must hand it back — otherwise the client sits on
+  // "Scoring the round" forever.
+  const { store, room, host, guests } = setup(['A']);
+  store.startRound(host.conn);
+  store.submitGuess(host.conn, 0, 0, 100);
+  store.submitGuess(guests[0]!.conn, 1, 1, 200);
+  assert.equal(room.phase, 'ROUND_RESULTS');
+
+  const fresh = new FakeConn();
+  const rejoined = store.join(fresh, room.code, 'A', 'sess-A');
+  assert.ok(rejoined.ok);
+  assert.equal(fresh.lastOfType('roundEnd'), undefined, 'join alone does not include it');
+  store.replayPhase(room, rejoined.player);
+  const recovered = fresh.lastOfType('roundEnd');
+  assert.ok(recovered, 'replayPhase hands back the results');
+  assert.equal(recovered.roundIndex, 0);
+
+  // Same for the podium.
+  store.advance(host.conn);
+  for (let i = 1; i < 5; i++) {
+    store.submitGuess(host.conn, 0, 0, 0);
+    store.submitGuess(fresh, 1, 1, 0);
+    store.advance(host.conn);
+  }
+  assert.equal(room.phase, 'GAME_OVER');
+  const podiumConn = new FakeConn();
+  const backAgain = store.join(podiumConn, room.code, 'A', 'sess-A');
+  assert.ok(backAgain.ok);
+  store.replayPhase(room, backAgain.player);
+  assert.ok(podiumConn.lastOfType('gameEnd'), 'and the podium');
+});
+
 test('no score leaks to any client during a round', () => {
   const { store, host, guests } = setup(['A']);
   store.startRound(host.conn);

@@ -58,7 +58,8 @@ export type LeaderboardRow = {
   score: number;
 };
 
-export type RoomClosedReason = 'hostLeft' | 'reaped';
+/** Why a client is being returned to the join screen. `kicked` is about that one player. */
+export type RoomClosedReason = 'hostLeft' | 'reaped' | 'kicked';
 
 export type ErrorCode =
   | 'ROOM_NOT_FOUND'

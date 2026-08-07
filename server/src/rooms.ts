@@ -236,7 +236,7 @@ export class RoomStore {
     room.bySession.delete(target.sessionId);
     if (target.conn) {
       this.connIndex.delete(target.conn);
-      target.conn.send({ type: 'roomClosed', reason: 'reaped' });
+      target.conn.send({ type: 'roomClosed', reason: 'kicked' });
     }
     this.touch(room, now);
     this.maybeEndRound(room, now);
