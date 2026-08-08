@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { LOAD_HEADROOM_MS } from '@pangoguessr/shared';
-import { getConfig, loadMaps } from '../maps';
+import { getConfig, loadStreetView } from '../maps';
 
 /**
  * The panorama, and the single most cost-sensitive component in the app (§7).
@@ -63,10 +63,10 @@ export function PanoramaView({
       try {
         const { mapsBrowserKey } = await getConfig();
         if (!mapsBrowserKey) throw new Error('No browser key configured');
-        const maps = await loadMaps(mapsBrowserKey);
+        const { StreetViewPanorama, StreetViewStatus } = await loadStreetView(mapsBrowserKey);
         if (cancelled || !hostRef.current) return;
 
-        const panorama = new maps.StreetViewPanorama(hostRef.current, {
+        const panorama = new StreetViewPanorama(hostRef.current, {
           pano: panoId,
           // Pannable, not movable (§7). Movement bills a new load per step — 20 players
           // taking 10 steps each is ~220 loads for one round, against 100 for a whole game.
@@ -90,7 +90,7 @@ export function PanoramaView({
 
         // A wrong or retired panorama ID would otherwise sit as a grey box.
         const statusListener = panorama.addListener('status_changed', () => {
-          if (panorama.getStatus() !== maps.StreetViewStatus.OK) {
+          if (panorama.getStatus() !== StreetViewStatus.OK) {
             setStatus('error');
             ready();
           }
