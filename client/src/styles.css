@@ -293,10 +293,89 @@ body {
 }
 
 /* Round */
-.screen--round,
 .screen--results,
 .screen--over {
   gap: 12px;
+}
+
+/*
+ * The round never scrolls. Both the panorama and the map swallow drag gestures, so on a
+ * phone a scrolling page meant the Confirm button could be impossible to reach.
+ */
+.screen--round {
+  gap: 10px;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  padding-top: max(12px, env(safe-area-inset-top));
+}
+
+/* The bar, timer and actions keep their size; only the stage flexes. */
+.screen--round > .round__bar,
+.screen--round > .timer,
+.screen--round > .actions {
+  flex: none;
+}
+
+.stage {
+  position: relative;
+  flex: 1;
+  /* Without this a flex child refuses to shrink below its content height. */
+  min-height: 0;
+}
+
+.stage__pano,
+.stage__map {
+  position: absolute;
+  inset: 0;
+}
+
+/* The map sits over the panorama on a phone, and is simply absent until opened. */
+.stage:not(.stage--map-open) .stage__map {
+  display: none;
+}
+
+.stage__map {
+  z-index: 1;
+}
+
+.stage__pano .pano {
+  height: 100%;
+  aspect-ratio: auto;
+}
+
+.stage__map .map--guess {
+  height: 100%;
+}
+
+.actions {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  padding-bottom: max(4px, env(safe-area-inset-bottom));
+}
+
+.actions__toggle {
+  flex: 0 0 auto;
+}
+
+.actions__confirm {
+  flex: 1;
+}
+
+.actions__locked {
+  margin: 0;
+  flex: 1;
+  text-align: center;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--muted);
+}
+
+.actions__locked strong {
+  color: var(--accent);
 }
 
 .round__bar {
@@ -392,50 +471,19 @@ body {
   z-index: 0;
 }
 
+/* Ocean, not a grey void: at whole-world zoom the tiles don't fill a tall phone screen, and
+   a matching backdrop reads as sea rather than as a broken map. */
+.leaflet-container {
+  background: #aad3df;
+}
+
 .map--guess {
   height: 320px;
-  background: var(--surface-2);
 }
 
 .map--reveal {
   height: 46vh;
   min-height: 260px;
-  background: var(--surface-2);
-}
-
-/* Collapsed by default: on a phone the map is a tap-to-expand overlay (§7). */
-.guess {
-  display: none;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.guess--open {
-  display: flex;
-}
-
-.guess__actions {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.map-toggle--open {
-  border-color: var(--accent);
-}
-
-.round__locked {
-  padding: 18px;
-  text-align: center;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-}
-
-.round__locked-title {
-  margin: 0 0 6px;
-  font-weight: 700;
-  color: var(--accent);
 }
 
 /* Results */
@@ -732,5 +780,85 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .spinner {
     animation-duration: 3s;
+  }
+}
+
+/*
+ * Mobile-first: everything above is the phone layout, which is the design target (§12).
+ * These only widen things where there's room — the structure never changes.
+ */
+@media (min-width: 700px) {
+  .screen {
+    max-width: 560px;
+    gap: 24px;
+  }
+
+  .screen--results,
+  .screen--over {
+    max-width: 760px;
+  }
+
+  .map--reveal {
+    height: 55vh;
+  }
+
+  .code {
+    font-size: 3.6rem;
+  }
+
+  .podium {
+    min-height: 300px;
+  }
+
+  .step--1 .step__block {
+    height: 170px;
+  }
+
+  .step--2 .step__block {
+    height: 124px;
+  }
+
+  .step--3 .step__block {
+    height: 92px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .screen--round {
+    max-width: 1200px;
+    gap: 12px;
+  }
+
+  /* Enough width to show the map beside the panorama rather than over it, so a desktop
+     player can look around and place a pin without toggling between them. */
+  .stage--map-open {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 34%);
+    gap: 12px;
+  }
+
+  .stage--map-open .stage__pano,
+  .stage--map-open .stage__map {
+    position: relative;
+    inset: auto;
+  }
+
+  .round__clock {
+    font-size: 2rem;
+  }
+
+  .actions {
+    justify-content: flex-end;
+  }
+
+  .actions__confirm {
+    flex: 0 0 260px;
+  }
+}
+
+@media (min-width: 1400px) {
+  .screen--results,
+  .screen--over {
+    max-width: 900px;
   }
 }

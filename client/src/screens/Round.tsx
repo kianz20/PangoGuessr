@@ -4,6 +4,9 @@ import { GuessMap } from '../components/GuessMap';
 import { PanoramaView } from '../components/PanoramaView';
 import type { RoundView } from '../useRoom';
 
+/** Wide enough to show the map beside the panorama instead of over it. */
+const DOCKED_MAP = '(min-width: 1024px)';
+
 export function Round({
   round,
   totalRounds,
@@ -14,7 +17,11 @@ export function Round({
   onGuess: (at: LatLng, elapsedMs: number) => void;
 }) {
   const [pin, setPin] = useState<LatLng | null>(null);
-  const [mapOpen, setMapOpen] = useState(false);
+  // On a phone the map is an overlay you open; on a desktop there's room for it to sit
+  // docked open from the start.
+  const [mapOpen, setMapOpen] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia(DOCKED_MAP).matches,
+  );
   const [remainingMs, setRemainingMs] = useState(round.durationMs);
 
   /** Set when the panorama is actually visible — this is what the 40s is measured from (§5). */
@@ -39,7 +46,7 @@ export function Round({
   // A fresh round: reset everything keyed on the round, not on renders.
   useEffect(() => {
     setPin(null);
-    setMapOpen(false);
+    setMapOpen(window.matchMedia(DOCKED_MAP).matches);
     setRemainingMs(round.durationMs);
     startedAtRef.current = null;
     submittedRef.current = round.youGuessed;
@@ -74,7 +81,6 @@ export function Round({
     const startedAt = startedAtRef.current;
     if (!at || startedAt === null) return;
     submit(at, Date.now() - startedAt);
-    setMapOpen(false);
   };
 
   const seconds = Math.ceil(remainingMs / 1000);
@@ -82,6 +88,8 @@ export function Round({
   const guessed = round.youGuessed || submittedRef.current;
 
   return (
+    // Fixed height, no page scroll. Both the panorama and the map swallow drag gestures, so
+    // a scrolling page meant the Confirm button could be unreachable on a phone.
     <main className="screen screen--round">
       <header className="round__bar">
         <span className="round__count">
@@ -95,42 +103,44 @@ export function Round({
         <div className="timer__fill" style={{ width: `${fraction * 100}%` }} />
       </div>
 
-      <PanoramaView panoId={round.panoId} roundIndex={round.index} onReady={handlePanoReady} />
+      <div className={`stage${mapOpen ? ' stage--map-open' : ''}`}>
+        <div className="stage__pano">
+          <PanoramaView panoId={round.panoId} roundIndex={round.index} onReady={handlePanoReady} />
+        </div>
 
-      {guessed ? (
-        <section className="round__locked">
-          <p className="round__locked-title">Guess locked in</p>
-          <p className="hint">Waiting for everyone else — the round ends when all have guessed.</p>
-        </section>
-      ) : (
-        <>
-          {/* Phone-sized: a tap-to-expand overlay, not a permanent split view (§7). */}
-          <button
-            className={`button button--ghost map-toggle${mapOpen ? ' map-toggle--open' : ''}`}
-            type="button"
-            onClick={() => setMapOpen((open) => !open)}
-          >
-            {mapOpen ? 'Hide map' : pin ? 'Adjust your guess' : 'Open map to guess'}
-          </button>
-
-          <section className={`guess${mapOpen ? ' guess--open' : ''}`}>
+        {!guessed && (
+          <div className="stage__map" aria-hidden={!mapOpen}>
             <GuessMap pin={pin} onPin={setPin} />
-            <div className="guess__actions">
-              <p className="hint">
-                {pin ? 'Tap the map to move your pin.' : 'Tap the map to drop a pin.'}
-              </p>
-              <button
-                className="button button--primary"
-                type="button"
-                disabled={!pin}
-                onClick={confirm}
-              >
-                Confirm guess
-              </button>
-            </div>
-          </section>
-        </>
-      )}
+          </div>
+        )}
+      </div>
+
+      {/* Always on screen, never scrolled away from. */}
+      <footer className="actions">
+        {guessed ? (
+          <p className="actions__locked">
+            <strong>Guess locked in.</strong> Waiting for everyone else.
+          </p>
+        ) : (
+          <>
+            <button
+              className="button button--ghost actions__toggle"
+              type="button"
+              onClick={() => setMapOpen((open) => !open)}
+            >
+              {mapOpen ? 'Hide map' : pin ? 'Adjust pin' : 'Open map'}
+            </button>
+            <button
+              className="button button--primary actions__confirm"
+              type="button"
+              disabled={!pin}
+              onClick={confirm}
+            >
+              {pin ? 'Confirm guess' : 'Drop a pin to guess'}
+            </button>
+          </>
+        )}
+      </footer>
     </main>
   );
 }
