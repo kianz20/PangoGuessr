@@ -583,12 +583,25 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.boards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  align-items: start;
+  /* Two columns of names on a 390px screen: everything below is sized to survive that. */
+  min-width: 0;
+}
+
+.boards .board {
+  min-width: 0;
+}
+
 .board__title {
-  margin: 14px 0 8px;
-  font-size: 0.85rem;
+  margin: 4px 0 8px;
+  font-size: 0.8rem;
   color: var(--muted);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
 }
 
 .board__list {
@@ -602,22 +615,53 @@ body {
 
 .row {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
+  align-items: baseline;
+  gap: 6px;
+  padding: 8px 10px;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 10px;
+  font-size: 0.9rem;
 }
 
+/* Your row has to be findable at a glance in a list of twenty. */
 .row--you {
-  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+  background: color-mix(in srgb, var(--warn) 20%, var(--surface));
+  border-color: var(--warn);
+  box-shadow: inset 3px 0 0 var(--warn);
+  font-weight: 700;
+}
+
+.row--you .row__name,
+.row--you .row__points,
+.row--you .row__rank {
+  color: var(--warn);
 }
 
 .row__rank {
-  min-width: 1.6em;
+  min-width: 1.4em;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+}
+
+/* Movement since the previous round. Direction is the whole message, so it stays small. */
+.delta {
+  font-size: 0.65rem;
+  line-height: 1;
+}
+
+.delta--up {
+  color: var(--accent);
+}
+
+.delta--down {
+  color: var(--danger);
+}
+
+.yours__rank {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .row__name {
@@ -631,7 +675,12 @@ body {
 
 .row__meta {
   color: var(--muted);
-  font-size: 0.85rem;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.row--you .row__meta {
+  color: color-mix(in srgb, var(--warn) 70%, var(--text));
 }
 
 .row__points {
@@ -645,6 +694,19 @@ body {
   flex-direction: column;
   gap: 8px;
   padding-top: 4px;
+}
+
+/*
+ * The host's Next button is what the whole room is waiting on, so it stays on screen no
+ * matter how far down the leaderboards run. The gradient keeps rows from appearing to
+ * collide with it as they scroll underneath.
+ */
+.results__actions--sticky {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  padding: 10px 0 max(10px, env(safe-area-inset-bottom));
+  background: linear-gradient(to top, var(--bg) 72%, transparent);
 }
 
 /* Podium */
@@ -829,18 +891,23 @@ body {
     gap: 12px;
   }
 
-  /* Enough width to show the map beside the panorama rather than over it, so a desktop
-     player can look around and place a pin without toggling between them. */
-  .stage--map-open {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(320px, 34%);
-    gap: 12px;
+  /*
+   * On a desktop the map floats over the panorama in the corner, rather than taking a
+   * column of its own: the panorama keeps the full width, and a 16:9 box — the aspect of
+   * the world bounds we fit — means the map has no empty ocean bands above and below.
+   */
+  .stage--map-open .stage__map {
+    inset: auto 0 0 auto;
+    width: min(42%, 560px);
+    height: auto;
+    aspect-ratio: 16 / 9;
+    margin: 14px;
+    border-radius: var(--radius);
+    box-shadow: 0 10px 30px rgb(0 0 0 / 45%);
   }
 
-  .stage--map-open .stage__pano,
-  .stage--map-open .stage__map {
-    position: relative;
-    inset: auto;
+  .stage--map-open .stage__map .map--guess {
+    border-color: rgb(255 255 255 / 25%);
   }
 
   .round__clock {

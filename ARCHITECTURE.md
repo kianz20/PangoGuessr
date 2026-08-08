@@ -762,5 +762,8 @@ architecture would need revisiting if it turns out to be wrong.
 
 **Cost**
 
-- ~20 games/month averaging 16 players (§7). The free allowance absorbs roughly 6× that,
-  but the assumption is worth re-checking if the game gets popular in the office.
+- **At most one game per day** (confirmed, not estimated), averaging 16 players — so ~20–30
+  games/month at 80 loads each, well inside the free allowance (§7). This is what makes the
+  300/day quota cap comfortable rather than restrictive: it permits a game plus two replays,
+  while bounding even a runaway loop to ~9,000 loads/month, which is still inside the free
+  tier. Re-check if the game gets popular in the office.

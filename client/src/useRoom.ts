@@ -51,6 +51,10 @@ export function useRoom() {
   const [round, setRound] = useState<RoundView | null>(null);
   const [results, setResults] = useState<ResultsView | null>(null);
   const [finalBoard, setFinalBoard] = useState<LeaderboardRow[] | null>(null);
+  /** Positive means they moved up the board since the previous round. */
+  const [rankDeltas, setRankDeltas] = useState<Record<string, number>>({});
+  /** Last round's ranks, kept client-side — the server has no reason to track history. */
+  const previousRanksRef = useRef<Record<string, number> | null>(null);
 
   const socketRef = useRef<WebSocket | null>(null);
   const intentRef = useRef<Intent | null>(null);
@@ -166,6 +170,9 @@ export function useRoom() {
           setRound(null);
           setResults(null);
           setFinalBoard(null);
+          // A new game starts everyone level, so last game's movement is meaningless.
+          previousRanksRef.current = null;
+          setRankDeltas({});
         }
         return;
       }
@@ -189,6 +196,21 @@ export function useRoom() {
       }
 
       if (msg.type === 'roundEnd') {
+        const previous = previousRanksRef.current;
+        // Round 1 has nothing to compare against, so no chevrons appear at all.
+        setRankDeltas(
+          previous
+            ? Object.fromEntries(
+                msg.leaderboard.map((row) => [
+                  row.playerId,
+                  (previous[row.playerId] ?? row.rank) - row.rank,
+                ]),
+              )
+            : {},
+        );
+        previousRanksRef.current = Object.fromEntries(
+          msg.leaderboard.map((row) => [row.playerId, row.rank]),
+        );
         setResults(msg);
         setRound(null);
         return;
@@ -349,6 +371,7 @@ export function useRoom() {
     round,
     results,
     finalBoard,
+    rankDeltas,
     createRoom,
     joinRoom,
     leaveRoom,

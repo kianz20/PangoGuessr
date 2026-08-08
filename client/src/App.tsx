@@ -14,6 +14,7 @@ export default function App() {
     round,
     results,
     finalBoard,
+    rankDeltas,
     createRoom,
     joinRoom,
     leaveRoom,
@@ -47,6 +48,7 @@ export default function App() {
             youId={room.youId}
             isHost={isHost}
             totalRounds={room.totalRounds}
+            rankDeltas={rankDeltas}
             onAdvance={advance}
           />
         ) : (
