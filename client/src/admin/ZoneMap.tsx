@@ -41,7 +41,14 @@ export function ZoneMap({
     const host = hostRef.current;
     if (!host || mapRef.current) return;
 
-    const map = L.map(host, { center: [10, 0], zoom: 2, zoomSnap: 0 });
+    const map = L.map(host, {
+      center: [10, 0],
+      zoom: 2,
+      zoomSnap: 0,
+      // Leaflet binds box-zoom to shift-drag, which is the same gesture used here to draw a
+      // zone — leaving it on meant every box you drew also zoomed the map into it.
+      boxZoom: false,
+    });
     L.tileLayer(OSM_URL, { attribution: '© OpenStreetMap' }).addTo(map);
     shapesRef.current = L.layerGroup().addTo(map);
     hitsRef.current = L.layerGroup().addTo(map);
