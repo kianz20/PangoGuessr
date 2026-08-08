@@ -22,3 +22,11 @@ services:
         sync: false
       - key: GOOGLE_MAPS_BROWSER_KEY
         sync: false
+      # Enables /admin (§7). Unset leaves the zone editor disabled.
+      - key: ADMIN_PASSWORD
+        sync: false
+      # Optional: with a Redis-compatible HTTP KV, zones saved from /admin survive restarts.
+      - key: ZONES_KV_URL
+        sync: false
+      - key: ZONES_KV_TOKEN
+        sync: false

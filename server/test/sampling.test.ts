@@ -106,7 +106,7 @@ test('the pool refuses to deal until it holds a full game', async () => {
   let n = 0;
   const fetcher: MetadataFetcher = async (point) => ({ panoId: `PANO_${n++}`, at: point });
 
-  const pool = new PooledLocationSource(fetcher, s, ZONES, ROUNDS_PER_GAME);
+  const pool = new PooledLocationSource(fetcher, s, () => ZONES, ROUNDS_PER_GAME);
   // Nothing pre-warmed yet: better an honest refusal than a hung Start button.
   assert.equal(pool.take(ROUNDS_PER_GAME), null);
 
@@ -131,7 +131,7 @@ test('a failing fetcher backs off instead of hammering the API', async () => {
     throw new Error('boom');
   };
 
-  const pool = new PooledLocationSource(broken, s, ZONES, 5);
+  const pool = new PooledLocationSource(broken, s, () => ZONES, 5);
   await pool.warm();
   const afterFirst = calls;
   assert.ok(afterFirst > 0, 'it tried');

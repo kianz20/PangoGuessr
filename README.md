@@ -3,7 +3,7 @@
 A GeoGuessr-style party game for a room full of phones. See [ARCHITECTURE.md](ARCHITECTURE.md)
 for the design and the reasoning behind it — this file is just how to run it.
 
-**Status:** steps 1–3 of the build order (§10). Playable end to end: lobby → 5 rounds →
+**Status:** steps 1–5 of the build order (§10). Playable end to end: lobby → 5 rounds →
 host-gated results → podium → play again, with reconnect at every phase.
 
 Imagery is **key-gated**. With `GOOGLE_MAPS_*` keys set you get real Street View sampled from
@@ -20,10 +20,17 @@ storm) burning thousands of loads with no visible symptom (§7).
 1. Google Cloud Console → new project → **enable billing** (required even on free usage).
 2. **APIs & Services → Enable**: *Maps JavaScript API* and *Street View Static API* (the
    latter is what serves metadata).
-3. **APIs & Services → Street View Static API → Quotas** → set the daily metadata/panorama
-   limit to **300/day**. Roughly 4 games, comfortably above any real session, and it keeps
-   even a runaway loop inside the monthly free allowance. This is the only thing that actually
-   stops spend — budget alerts just email you afterwards.
+3. **Quotas — cap the right API.** Panorama loads bill through the *Maps JavaScript API*
+   (as "Dynamic Street View"); the *Street View Static API* only serves metadata, which is
+   [free of charge](https://developers.google.com/maps/documentation/streetview/metadata) but
+   still consumes a daily quota.
+   - **Maps JavaScript API → Quotas** → set the per-day limit to **300**. Roughly 4 games,
+     comfortably above any real session, and it keeps even a runaway loop inside the monthly
+     free allowance. This is the only thing that actually stops spend — budget alerts just
+     email you afterwards.
+   - **Street View Static API → "Metadata requests per day"** → raise to **10,000**. Sampling
+     spends these freely; capping them low starves the location pool and the game fails with
+     `OVER_QUERY_LIMIT` while costing you nothing.
 4. **Billing → Budgets & alerts**: alerts at **$5** and **$20**.
 5. **Credentials → two API keys**:
    - *Browser key* — restrict by **HTTP referrer** to your Render domain (and
@@ -57,7 +64,8 @@ QR code encodes whatever origin the page is served from.
 | `npm run build` | Client bundle, then server bundle |
 | `npm start` | Runs the built server (`NODE_ENV=production` to serve the client) |
 | `npm run typecheck` | `tsc --noEmit` across all three workspaces |
-| `npm test --workspace server` | Room store: reconnect, name clashes, host drop, reaping |
+| `npm test` | Unit tests (server + shared logic) |
+| `npm run check:imagery` | Samples every zone and reports hit rates (free metadata calls) |
 
 ## Deploying to Render
 
@@ -85,10 +93,27 @@ Expect a 30–60s cold start after ~15 minutes idle (§9). That's accepted, and 
 screen has an explicit "waking the server up" state for it. Worth knowing the host absorbs
 it: by the time the QR is up, the service is awake.
 
+## The zone editor
+
+`/admin`, behind a single shared password. Set `ADMIN_PASSWORD` to enable it; leave it unset
+and the endpoints return 503. Shift-drag the map to draw a zone, name it, set its weight, and
+**Test this zone** samples it and reports a hit rate — under ~30% means mostly ocean.
+
+Whether an edit outlives a restart depends on what's configured:
+
+| Configured | Saving from `/admin` |
+| --- | --- |
+| `ZONES_KV_URL` + `ZONES_KV_TOKEN` | permanent — used by every game from then on |
+| neither | applies now, lost on restart; the screen hands you JSON for `ZONES_JSON` |
+
+Any Redis-compatible HTTP KV works (Upstash's free tier, for instance): create a database,
+copy its REST URL and token. It stores one key holding one JSON array. The screen always
+shows which mode it's in, so a change can't silently fail to stick.
+
 ## Testing
 
 ```bash
-npm test        # 40 unit tests: rooms, rounds/timers/scoring, zone sampling and the pool
+npm test        # 53 unit tests: rooms, rounds, scoring, distance, sampling, zone storage
 npm run smoke   # 63 end-to-end checks over real WebSockets; needs a server running
 node server/test/smoke-game.mjs 3200       # ...or a single suite against another port
 ```

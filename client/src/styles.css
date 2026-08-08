@@ -854,6 +854,115 @@ body {
   margin-top: 6px;
 }
 
+/* Admin zone editor — desktop only (§7) */
+.admin {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 20px;
+  min-height: 100dvh;
+}
+
+.admin__head h1 {
+  margin: 0;
+  font-size: 1.4rem;
+}
+
+.admin__head .hint {
+  text-align: left;
+  margin-top: 4px;
+}
+
+.admin__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+
+.admin__map {
+  height: 100%;
+  min-height: 420px;
+}
+
+.admin__side {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+.admin__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  max-height: 34vh;
+}
+
+.admin__zone {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.admin__zone--selected {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.admin__zone-share {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.admin__editor,
+.admin__actions,
+.admin__buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.admin__buttons {
+  flex-direction: row;
+}
+
+.admin__buttons .button {
+  flex: 1;
+  padding: 10px;
+  font-size: 0.9rem;
+}
+
+.notice--error {
+  background: color-mix(in srgb, var(--danger) 16%, var(--surface));
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+
+.admin code {
+  font-size: 0.85em;
+  color: var(--accent);
+}
+
+/* Below this the map is too small to draw on — the editor is a desktop tool. */
+@media (max-width: 800px) {
+  .admin__body {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Status screens */
 .status__title {
   margin: 0;

@@ -1,3 +1,4 @@
+import { Admin } from './admin/Admin';
 import { GameOver } from './screens/GameOver';
 import { Home } from './screens/Home';
 import { Lobby } from './screens/Lobby';
@@ -6,6 +7,14 @@ import { Round } from './screens/Round';
 import { useRoom } from './useRoom';
 
 export default function App() {
+  // No router: one extra path doesn't justify the dependency, and /admin shares nothing
+  // with the game's state.
+  if (location.pathname.replace(/\/$/, '') === '/admin') return <Admin />;
+
+  return <Game />;
+}
+
+function Game() {
   const {
     status,
     room,

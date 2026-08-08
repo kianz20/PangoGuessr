@@ -75,9 +75,20 @@ export class PooledLocationSource implements LocationSource {
     private readonly fetcher: MetadataFetcher,
     /** Shared with the fetcher, so /api/health reports the calls actually made. */
     private readonly sampleStats: SampleStats = { metadataCalls: 0, misses: 0 },
-    private readonly zones: readonly Zone[] = ZONES,
+    /** A provider, not a fixed array: the admin screen can change zones at runtime. */
+    private readonly zonesOf: () => readonly Zone[] = () => ZONES,
     private readonly target = POOL_TARGET,
   ) {}
+
+  /**
+   * Drops everything currently held. Called when the zone list changes, so panoramas
+   * sampled from a zone that no longer exists don't turn up in the next game.
+   */
+  clear(): void {
+    this.pool.length = 0;
+    this.pausedUntil = 0;
+    this.lastError = null;
+  }
 
   get size(): number {
     return this.pool.length;
@@ -117,7 +128,7 @@ export class PooledLocationSource implements LocationSource {
   private async runRefill(): Promise<void> {
     try {
       while (this.pool.length < this.target) {
-        const hit = await samplePanorama(this.zones, this.fetcher, this.sampleStats);
+        const hit = await samplePanorama(this.zonesOf(), this.fetcher, this.sampleStats);
         if (!hit) {
           this.lastError = 'sampling found no coverage';
           this.pausedUntil = Date.now() + BACKOFF_MS;
@@ -152,13 +163,16 @@ export class PooledLocationSource implements LocationSource {
   }
 }
 
-export function createLocationSource(serverKey: string | undefined): LocationSource {
+export function createLocationSource(
+  serverKey: string | undefined,
+  zonesOf: () => readonly Zone[] = () => ZONES,
+): LocationSource {
   if (!serverKey) {
     console.log('[locations] no GOOGLE_MAPS_SERVER_KEY — using the fixed list and placeholder viewer');
     return new FixedLocationSource();
   }
   const stats: SampleStats = { metadataCalls: 0, misses: 0 };
-  const pool = new PooledLocationSource(googleMetadataFetcher(serverKey, stats), stats);
+  const pool = new PooledLocationSource(googleMetadataFetcher(serverKey, stats), stats, zonesOf);
   // Deliberately NOT warmed at boot. The free tier wakes on any request — including health
   // checks and idle pings — and sampling on every wake burns daily quota for games nobody
   // is playing. The pool fills when a room is created instead.

@@ -6,8 +6,12 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { isValidCode } from '@pangoguessr/shared';
 import type { ClientMessage, ServerMessage } from '@pangoguessr/shared';
 import { loadDotEnv } from './env';
-import { createLocationSource } from './locationSource';
+import { createLocationSource, PooledLocationSource } from './locationSource';
 import { RoomStore, type Conn } from './rooms';
+import { googleMetadataFetcher } from './streetview';
+import { createZonePersistence } from './zonePersistence';
+import { validateZones, ZoneStore } from './zoneStore';
+import { randomPointIn } from './zones';
 
 loadDotEnv();
 
@@ -18,8 +22,18 @@ const SERVER_KEY = process.env.GOOGLE_MAPS_SERVER_KEY;
 /** Public by nature; an HTTP-referrer restriction is what protects it (§7). */
 const BROWSER_KEY = process.env.GOOGLE_MAPS_BROWSER_KEY ?? '';
 
-const locations = createLocationSource(SERVER_KEY);
+/** Not real auth — it stops the URL being found by someone in the room mid-game (§7). */
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+
+const zoneStore = new ZoneStore();
+const locations = createLocationSource(SERVER_KEY, () => zoneStore.get());
+// New zones mean the pool may hold panoramas from zones that no longer exist.
+zoneStore.onChange(() => {
+  if (locations instanceof PooledLocationSource) locations.clear();
+});
+
 const app = express();
+app.use(express.json({ limit: '64kb' }));
 const server = createServer(app);
 
 /**
@@ -49,6 +63,13 @@ app.get('/api/health', (_req, res) => {
       estimatedPanoramaLoads: usage.playerRounds,
     },
     locations: locations.stats(),
+    // Enough to confirm a zone store is wired up without needing the admin password.
+    zones: {
+      count: zoneStore.get().length,
+      source: zoneStore.source(),
+      store: zoneStore.persistenceLabel(),
+      ...(zoneStore.saveError() ? { saveError: zoneStore.saveError() } : {}),
+    },
     // Never in production: player names are more than a health check needs to expose.
     ...(IS_PROD ? {} : { detail: store.describe() }),
   });
@@ -60,6 +81,99 @@ app.get('/api/health', (_req, res) => {
  */
 app.get('/api/config', (_req, res) => {
   res.json({ mapsBrowserKey: BROWSER_KEY, imagery: BROWSER_KEY ? 'streetview' : 'placeholder' });
+});
+
+// ---------------------------------------------------------------------------------------
+// Admin: zone editing (§7)
+// ---------------------------------------------------------------------------------------
+
+/**
+ * A single shared password, checked on every admin request. The editor's only privileged
+ * capability is metadata sampling, which is free, so an exposed editor is an annoyance
+ * rather than a bill.
+ */
+function adminAuthorised(req: express.Request, res: express.Response): boolean {
+  if (!ADMIN_PASSWORD) {
+    res.status(503).json({ error: 'Admin is disabled: set ADMIN_PASSWORD to enable it.' });
+    return false;
+  }
+  const supplied = req.get('x-admin-password') ?? '';
+  if (supplied !== ADMIN_PASSWORD) {
+    res.status(401).json({ error: 'Wrong password.' });
+    return false;
+  }
+  return true;
+}
+
+app.get('/api/admin/zones', (req, res) => {
+  if (!adminAuthorised(req, res)) return;
+  res.json({
+    zones: zoneStore.get(),
+    source: zoneStore.source(),
+    persistence: zoneStore.persistenceLabel(),
+    saveError: zoneStore.saveError(),
+    imagery: SERVER_KEY ? 'streetview' : 'placeholder',
+  });
+});
+
+app.put('/api/admin/zones', async (req, res) => {
+  if (!adminAuthorised(req, res)) return;
+  const result = await zoneStore.set((req.body as { zones?: unknown } | undefined)?.zones);
+  if (!result.ok) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+  console.log(
+    `[zones] ${result.zones.length} zones applied from /admin (persisted: ${result.persisted})`,
+  );
+  res.json({
+    ok: true,
+    persisted: result.persisted ?? false,
+    source: zoneStore.source(),
+    saveError: zoneStore.saveError(),
+  });
+});
+
+/**
+ * Samples a candidate bbox and reports what it found — the feature that makes the editor
+ * worth having, since it shows immediately whether a zone is mostly ocean (§7). Metadata
+ * requests only, so testing a zone never costs anything.
+ */
+app.post('/api/admin/test-zone', async (req, res) => {
+  if (!adminAuthorised(req, res)) return;
+  if (!SERVER_KEY) {
+    res.status(503).json({ error: 'No GOOGLE_MAPS_SERVER_KEY configured, so zones cannot be tested.' });
+    return;
+  }
+
+  const body = req.body as { bbox?: unknown; samples?: unknown };
+  // Reuse the zone validator so a drawn box is checked the same way a saved one is.
+  const validated = validateZones([{ id: 'test', name: 'test', weight: 1, bbox: body.bbox }]);
+  if (!validated.ok) {
+    res.status(400).json({ error: validated.error });
+    return;
+  }
+
+  const zone = validated.zones[0]!;
+  const samples = Math.min(Math.max(Number(body.samples) || 12, 1), 25);
+  const stats = { metadataCalls: 0, misses: 0 };
+  const fetcher = googleMetadataFetcher(SERVER_KEY, stats);
+
+  try {
+    const hits: { lat: number; lng: number; panoId: string }[] = [];
+    for (let i = 0; i < samples; i++) {
+      const hit = await fetcher(randomPointIn(zone), 5000);
+      if (hit) hits.push({ ...hit.at, panoId: hit.panoId });
+    }
+    res.json({
+      samples,
+      found: hits.length,
+      hitRate: Math.round((hits.length / samples) * 100),
+      hits,
+    });
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 // Client and API share an origin in prod (§2), so there's no CORS or cross-site cookie
@@ -228,6 +342,13 @@ setInterval(() => {
     console.log(`[room ${code}] closed (${reason})`);
   }
 }, SWEEP_MS).unref();
+
+// Zones are loaded before serving, so the first game of a boot uses the saved list.
+await zoneStore.attach(createZonePersistence());
+console.log(
+  `[zones] ${zoneStore.get().length} zones active (source: ${zoneStore.source()}, ` +
+    `store: ${zoneStore.persistenceLabel()})`,
+);
 
 server.listen(PORT, () => {
   console.log(`PangoGuessr server on :${PORT} (${IS_PROD ? 'production' : 'development'})`);

@@ -3,8 +3,8 @@
 A GeoGuessr-style party game. Players join a room from their own phones, each sees the
 same location, and scores individually on **accuracy**.
 
-Status: implemented through step 3 of the build order (§10) — lobby, round loop and
-Street View sampling. The admin zone editor (§7) is not built.
+Status: implemented through step 5 of the build order (§10) — lobby, round loop, Street View
+sampling and the admin zone editor.
 
 ---
 
@@ -69,6 +69,7 @@ kick            { playerId }                         // host only
 startRound      { }                                  // host only
 submitGuess     { lat, lng, elapsedMs }              // client-measured, server-clamped
 advance         { }                                  // host only — leaves round results
+cancelGame      { }                                  // host only — abandon, back to lobby
 ```
 
 Server → Client:
@@ -471,32 +472,33 @@ things make it actually useful rather than just a drawing tool:
 - **Hit-rate estimate** — sample 20 points, report how many found coverage. A zone under
   ~30% will be slow to draw from and should be tightened.
 
-#### Persistence — the wrinkle
+#### Persistence
 
 Zones are the **first piece of state that must outlive a server restart**, which breaks the
-"no database, everything in memory" assumption in §8. And Render's free tier has an
-**ephemeral filesystem** — anything written to disk is wiped on every redeploy and every
-spin-down. So writing `zones.json` server-side does not work on free tier.
+"no database, everything in memory" assumption in §8. Render's free tier has an **ephemeral
+filesystem** — anything written to disk is wiped on every redeploy and every spin-down — so
+`zones.json` on the server does not work.
 
-Options considered:
+Three ways to set the zone list, highest priority first:
 
-| Approach | Verdict |
-| --- | --- |
-| Write `zones.json` on the server | **Broken on Render free** — wiped on redeploy/spin-down |
-| Render persistent disk | Paid add-on; overkill for one config file |
-| Hosted Postgres (Neon/Supabase free tier) | Works, but a whole database dependency for one array |
-| **Export from the editor, commit to repo** | **Chosen** |
+| Source | Survives a restart | How zones change |
+| --- | --- | --- |
+| **KV store** (`ZONES_KV_URL` + `ZONES_KV_TOKEN`) | yes | saved from `/admin`, instantly |
+| **`ZONES_JSON` env var** | yes | paste the editor's JSON into Render |
+| **`server/src/zones.ts`** | yes (and versioned in git) | edit and commit |
 
-**Chosen: the editor is a generator, not a live store.** `/admin` loads the current
-`ZONES` array, lets you draw and test, then produces updated JSON to download or copy.
-You commit it to `server/zones.ts` and Render redeploys.
+With a KV store configured, editing zones is fully self-service: `/admin` writes them and
+every game from then on uses them, including after a spin-down. Any Redis-compatible HTTP
+KV works (Upstash's free tier is the obvious one) — REST rather than a connection matters on
+a service that sleeps, and it is one key holding one JSON array, not a database schema.
 
-This costs one commit per change and gains a lot: zero infrastructure, zero cost, zones
-versioned in git with the rest of the config, and no new failure mode at game time.
-Zones change rarely — this is a config-authoring tool, not a runtime feature.
+With no store configured, `/admin` still applies changes to the running server and hands
+back JSON to paste into `ZONES_JSON` or commit. The screen says which mode it's in, so
+nobody assumes a change stuck when it didn't.
 
-If zone editing ever needs to happen live, the upgrade path is a hosted Postgres and a
-cache in memory, but there is no reason to pay that cost now.
+An edit is applied in memory **before** it is written, and a write failure is reported
+rather than swallowed: the zones you just drew take effect either way, and the screen tells
+you if they won't survive a restart.
 
 #### Access
 
@@ -691,7 +693,7 @@ miserable.
 - [x] ~~Billing account~~ — **available**, §7
 - [x] ~~Final screen~~ — **top-3 podium over full standings**, §4
 - [x] ~~Post-game flow~~ — **back to `LOBBY`, same room, scores reset**, §4
-- [x] ~~Zone authoring~~ — **`/admin` editor that exports JSON to commit**, §7
+- [x] ~~Zone authoring~~ — **`/admin` editor, saved to a KV store when configured**, §7
 - [x] ~~Host disconnects~~ — **room is dropped after a ~30s grace period; no host
   promotion**, §4
 - [x] ~~Distance curve~~ — **GeoGuessr's exponential**, §6

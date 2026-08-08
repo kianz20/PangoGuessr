@@ -172,11 +172,13 @@ test('a duplicate guess is ignored rather than double-counted', () => {
 });
 
 test('the clock has no bearing on the score', () => {
-  const { store, host, guests } = setup(['A']);
+  const { store, room, host, guests } = setup(['A']);
   store.startRound(host.conn);
 
-  store.submitGuess(host.conn, -41.3, 174.8, -99_999); // "instant"
-  store.submitGuess(guests[0]!.conn, -41.3, 174.8, 999_999); // absurdly slow
+  // Both guess the answer itself, so the score is high whichever location was dealt.
+  const { lat, lng } = room.round!.location.at;
+  store.submitGuess(host.conn, lat, lng, -99_999); // "instant"
+  store.submitGuess(guests[0]!.conn, lat, lng, 999_999); // absurdly slow
   const end = host.conn.lastOfType('roundEnd');
   assert.ok(end);
 
