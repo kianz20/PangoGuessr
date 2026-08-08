@@ -164,6 +164,9 @@ export class RoomStore {
     };
     this.rooms.set(room.code, room);
 
+    // Someone is about to play: start sampling now, during the lobby, so Start is instant.
+    this.locations.prewarm?.();
+
     const player = this.addPlayer(room, conn, name, sessionId, true);
     return { ok: true, room, player };
   }

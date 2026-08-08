@@ -20,7 +20,12 @@ if (!key) {
   process.exit(1);
 }
 
-const SAMPLES_PER_ZONE = 8;
+/**
+ * Metadata is free of *charge*, but it still consumes the Street View Static API's daily
+ * quota — so this script is not free in quota terms. 4 per zone is enough to spot a dud
+ * zone without eating a day's allowance.
+ */
+const SAMPLES_PER_ZONE = 4;
 const stats: SampleStats = { metadataCalls: 0, misses: 0 };
 const fetcher = googleMetadataFetcher(key, stats);
 

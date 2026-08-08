@@ -14,6 +14,12 @@ export type RoundLocation = {
 export interface LocationSource {
   /** Sync on purpose: the room's phase transitions stay synchronous and testable. */
   take(count: number): RoundLocation[] | null;
+  /**
+   * "Someone is about to play." Called when a room is created, which is the earliest
+   * moment we know sampling is worth doing — and there's a lobby's worth of time before
+   * anyone presses Start.
+   */
+  prewarm?(): void;
   stats(): Record<string, number | string>;
 }
 
@@ -37,7 +43,15 @@ export class FixedLocationSource implements LocationSource {
   }
 }
 
-const POOL_TARGET = 20;
+/**
+ * A game needs 5. Holding 8 covers a game plus the start of a replay while the background
+ * refill catches up.
+ *
+ * Deliberately not 20: metadata is free of *charge* but still consumes daily API quota, and
+ * on Render's free tier the server spins down after ~15 minutes idle — so every wake would
+ * re-sample the whole pool from scratch. A big target turns idle time into quota burn.
+ */
+const POOL_TARGET = 8;
 /** How long to wait after a refill failure before trying again, so a bad key doesn't spin. */
 const BACKOFF_MS = 30_000;
 
@@ -81,7 +95,12 @@ export class PooledLocationSource implements LocationSource {
     return taken;
   }
 
-  /** Called at boot so the first game of the day doesn't pay the sampling latency. */
+  /** Fire-and-forget top-up, triggered by a room being created. */
+  prewarm(): void {
+    void this.refill();
+  }
+
+  /** Awaitable version, for the checker script and tests. */
   async warm(): Promise<void> {
     await this.refill();
   }
@@ -140,7 +159,9 @@ export function createLocationSource(serverKey: string | undefined): LocationSou
   }
   const stats: SampleStats = { metadataCalls: 0, misses: 0 };
   const pool = new PooledLocationSource(googleMetadataFetcher(serverKey, stats), stats);
-  void pool.warm();
-  console.log(`[locations] Street View sampling active, pre-warming ${POOL_TARGET} panoramas`);
+  // Deliberately NOT warmed at boot. The free tier wakes on any request — including health
+  // checks and idle pings — and sampling on every wake burns daily quota for games nobody
+  // is playing. The pool fills when a room is created instead.
+  console.log(`[locations] Street View sampling active, pool fills when a room is created`);
   return pool;
 }
