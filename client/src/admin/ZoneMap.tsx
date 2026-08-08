@@ -3,7 +3,7 @@ import L from 'leaflet';
 
 export type Bbox = [south: number, west: number, north: number, east: number];
 
-export type ZoneShape = { id: string; name: string; bbox: Bbox };
+export type ZoneShape = { id: string; name: string; bbox: Bbox; groupId: string };
 export type TestHit = { lat: number; lng: number };
 
 const OSM_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
@@ -15,15 +15,17 @@ const OSM_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
  */
 export function ZoneMap({
   zones,
-  selectedId,
+  selectedGroupId,
+  selectedZoneId,
   testHits,
   onSelect,
   onDraw,
 }: {
   zones: ZoneShape[];
-  selectedId: string | null;
+  selectedGroupId: string | null;
+  selectedZoneId: string | null;
   testHits: TestHit[];
-  onSelect: (id: string) => void;
+  onSelect: (zoneId: string, groupId: string) => void;
   onDraw: (bbox: Bbox) => void;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -108,20 +110,23 @@ export function ZoneMap({
     if (!group) return;
     group.clearLayers();
     for (const zone of zones) {
-      const selected = zone.id === selectedId;
+      // Three states, so you can see at a glance which boxes belong to the group you're
+      // editing versus the one box you're editing.
+      const isZone = zone.id === selectedZoneId;
+      const inGroup = zone.groupId === selectedGroupId;
       const rect = L.rectangle(
         L.latLngBounds([zone.bbox[0], zone.bbox[1]], [zone.bbox[2], zone.bbox[3]]),
         {
-          color: selected ? '#f0b542' : '#8fb3d9',
-          weight: selected ? 3 : 1.5,
-          fillOpacity: selected ? 0.2 : 0.08,
+          color: isZone ? '#f0b542' : inGroup ? '#35d39a' : '#8fb3d9',
+          weight: isZone ? 3 : inGroup ? 2 : 1,
+          fillOpacity: isZone ? 0.25 : inGroup ? 0.15 : 0.05,
         },
       )
         .bindTooltip(zone.name, { direction: 'center', className: 'pin-label' })
-        .on('click', () => onSelectRef.current(zone.id));
+        .on('click', () => onSelectRef.current(zone.id, zone.groupId));
       group.addLayer(rect);
     }
-  }, [zones, selectedId]);
+  }, [zones, selectedGroupId, selectedZoneId]);
 
   useEffect(() => {
     const group = hitsRef.current;

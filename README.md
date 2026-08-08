@@ -93,6 +93,20 @@ Expect a 30–60s cold start after ~15 minutes idle (§9). That's accepted, and 
 screen has an explicit "waking the server up" state for it. Worth knowing the host absorbs
 it: by the time the QR is up, the service is awake.
 
+## Place names on the reveal
+
+The reveal names the nearest settlement ("Wellington, New Zealand", or "25 km from Alexandra,
+New Zealand" out in the country), resolved from a GeoNames extract committed at
+`server/data/places.tsv.gz` — no API, no key, no quota. To refresh the data:
+
+```bash
+node server/scripts/build-cities.mjs
+```
+
+That downloads GeoNames' cities1000 plus the country and region tables, trims them, and rewrites
+the gzipped file. Data © [GeoNames](https://www.geonames.org/), CC BY 4.0 — the reveal screen
+carries the attribution.
+
 ## The zone editor
 
 `/admin`, behind a single shared password. Set `ADMIN_PASSWORD` to enable it; leave it unset
@@ -113,7 +127,7 @@ shows which mode it's in, so a change can't silently fail to stick.
 ## Testing
 
 ```bash
-npm test        # 53 unit tests: rooms, rounds, scoring, distance, sampling, zone storage
+npm test        # 64 unit tests: rooms, rounds, scoring, distance, sampling, zones, place names
 npm run smoke   # 63 end-to-end checks over real WebSockets; needs a server running
 node server/test/smoke-game.mjs 3200       # ...or a single suite against another port
 ```

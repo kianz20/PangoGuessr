@@ -1,11 +1,12 @@
 import type { LatLng } from '@pangoguessr/shared';
 import { FIXED_LOCATIONS, dealLocations } from './locations';
+import { describeLocation } from './places';
 import { googleMetadataFetcher, samplePanorama, type MetadataFetcher, type SampleStats } from './streetview';
-import { ZONES, type Zone } from './zones';
+import { ZONE_GROUPS, type ZoneGroup } from './zones';
 
 export type RoundLocation = {
   id: string;
-  /** Shown on the reveal only. With real sampling this is the zone, not a street address. */
+  /** Shown on the reveal only — the nearest settlement, or the zone if there isn't one. */
   name: string;
   at: LatLng;
   panoId: string;
@@ -76,7 +77,7 @@ export class PooledLocationSource implements LocationSource {
     /** Shared with the fetcher, so /api/health reports the calls actually made. */
     private readonly sampleStats: SampleStats = { metadataCalls: 0, misses: 0 },
     /** A provider, not a fixed array: the admin screen can change zones at runtime. */
-    private readonly zonesOf: () => readonly Zone[] = () => ZONES,
+    private readonly zonesOf: () => readonly ZoneGroup[] = () => ZONE_GROUPS,
     private readonly target = POOL_TARGET,
   ) {}
 
@@ -137,7 +138,9 @@ export class PooledLocationSource implements LocationSource {
         this.pool.push({
           // Panorama IDs are stable, so this doubles as a dedupe key within the pool.
           id: hit.panoId,
-          name: hit.zoneName,
+          // The nearest settlement is far more satisfying on the reveal than the zone it was
+          // drawn from, but somewhere genuinely remote has no useful name — hence the fallback.
+          name: describeLocation(hit.at) ?? hit.zoneName,
           at: hit.at,
           panoId: hit.panoId,
         });
@@ -165,7 +168,7 @@ export class PooledLocationSource implements LocationSource {
 
 export function createLocationSource(
   serverKey: string | undefined,
-  zonesOf: () => readonly Zone[] = () => ZONES,
+  zonesOf: () => readonly ZoneGroup[] = () => ZONE_GROUPS,
 ): LocationSource {
   if (!serverKey) {
     console.log('[locations] no GOOGLE_MAPS_SERVER_KEY — using the fixed list and placeholder viewer');

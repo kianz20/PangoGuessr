@@ -1080,3 +1080,76 @@ body {
     max-width: 900px;
   }
 }
+
+/* Zone groups: a collapsible group holding its boxes. */
+.admin__groups {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  padding-right: 2px;
+}
+
+.admin__group {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.admin__group--open {
+  border-color: var(--accent);
+}
+
+.admin__group-head {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  background: none;
+  border: 0;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.admin__group--open .admin__group-head {
+  color: var(--accent);
+}
+
+.admin__group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 12px 12px;
+  border-top: 1px solid var(--line);
+}
+
+.admin__group-body .admin__list {
+  max-height: none;
+}
+
+.admin__delete-group {
+  padding: 8px;
+  font-size: 0.8rem;
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+}
+
+/* GeoNames requires attribution for the place names on the reveal. */
+.attribution {
+  margin: 8px 0 0;
+  text-align: center;
+  font-size: 0.7rem;
+  color: var(--muted);
+  opacity: 0.75;
+}
+
+.attribution a {
+  color: inherit;
+}

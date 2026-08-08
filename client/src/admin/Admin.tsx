@@ -2,51 +2,60 @@ import { useCallback, useEffect, useState } from 'react';
 import { ZoneMap, type Bbox } from './ZoneMap';
 
 type Zone = { id: string; name: string; weight: number; bbox: Bbox };
+type Group = { id: string; name: string; weight: number; zones: Zone[] };
 
 type Loaded = {
-  zones: Zone[];
+  groups: Group[];
   source: 'default' | 'env' | 'admin' | 'stored';
   persistence: string;
   imagery: 'streetview' | 'placeholder';
 };
 
-type TestResult = { hitRate: number; found: number; samples: number; hits: { lat: number; lng: number }[] };
+type TestResult = {
+  hitRate: number;
+  found: number;
+  samples: number;
+  hits: { lat: number; lng: number }[];
+};
 
 const PASSWORD_KEY = 'pangoguessr.adminPassword';
 
 async function api<T>(path: string, password: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      'x-admin-password': password,
-      ...(init?.headers ?? {}),
-    },
+    headers: { 'Content-Type': 'application/json', 'x-admin-password': password, ...(init?.headers ?? {}) },
   });
   const body = (await response.json()) as T & { error?: string };
   if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
   return body;
 }
 
-function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 24);
+function slug(name: string, fallback: string): string {
+  return (
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 32) || fallback
+  );
 }
 
 /**
  * Desktop-only zone editor (§7). Typing bounding boxes by hand is tedious and error-prone,
  * and the whole quality of the game lives in this list.
+ *
+ * Two levels: a **group** is what competes for a round ("New Zealand", 13% of rounds), and
+ * its **zones** are the boxes one of which is then drawn. So a country made of five tight
+ * boxes doesn't get five times the odds.
  */
 export function Admin() {
-  // Kept in sessionStorage, not localStorage: a shared password shouldn't outlive the tab.
+  // sessionStorage, not localStorage: a shared password shouldn't outlive the tab.
   const [password, setPassword] = useState(() => sessionStorage.getItem(PASSWORD_KEY) ?? '');
   const [entry, setEntry] = useState('');
   const [loaded, setLoaded] = useState<Loaded | null>(null);
-  const [zones, setZones] = useState<Zone[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [groupId, setGroupId] = useState<string | null>(null);
+  const [zoneId, setZoneId] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
@@ -56,7 +65,8 @@ export function Admin() {
     try {
       const data = await api<Loaded>('/api/admin/zones', pw);
       setLoaded(data);
-      setZones(data.zones);
+      setGroups(data.groups);
+      setGroupId((current) => current ?? data.groups[0]?.id ?? null);
       setError(null);
       sessionStorage.setItem(PASSWORD_KEY, pw);
       setPassword(pw);
@@ -70,32 +80,60 @@ export function Admin() {
     if (password) void load(password);
   }, [password, load]);
 
-  const selected = zones.find((z) => z.id === selectedId) ?? null;
-  const dirty = loaded !== null && JSON.stringify(zones) !== JSON.stringify(loaded.zones);
+  const group = groups.find((g) => g.id === groupId) ?? null;
+  const zone = group?.zones.find((z) => z.id === zoneId) ?? null;
+  const dirty = loaded !== null && JSON.stringify(groups) !== JSON.stringify(loaded.groups);
+  const totalWeight = groups.reduce((sum, g) => sum + Number(g.weight || 0), 0);
 
-  const update = (id: string, patch: Partial<Zone>) =>
-    setZones((current) => current.map((z) => (z.id === id ? { ...z, ...patch } : z)));
+  const patchGroup = (id: string, patch: Partial<Group>) =>
+    setGroups((current) => current.map((g) => (g.id === id ? { ...g, ...patch } : g)));
 
+  const patchZone = (gid: string, zid: string, patch: Partial<Zone>) =>
+    setGroups((current) =>
+      current.map((g) =>
+        g.id === gid ? { ...g, zones: g.zones.map((z) => (z.id === zid ? { ...z, ...patch } : z)) } : g,
+      ),
+    );
+
+  const uniqueId = (base: string) => {
+    const taken = new Set(groups.flatMap((g) => [g.id, ...g.zones.map((z) => z.id)]));
+    let n = 1;
+    while (taken.has(`${base}-${n}`)) n++;
+    return `${base}-${n}`;
+  };
+
+  const addGroup = () => {
+    const id = uniqueId('group');
+    const created: Group = { id, name: `Group ${groups.length + 1}`, weight: 2, zones: [] };
+    setGroups((current) => [...current, created]);
+    setGroupId(id);
+    setZoneId(null);
+  };
+
+  // Drawing always adds to the selected group — the map is how you build a group up.
   const addZone = (bbox: Bbox) => {
-    const base = 'zone';
-    let n = zones.length + 1;
-    while (zones.some((z) => z.id === `${base}-${n}`)) n++;
-    const zone: Zone = { id: `${base}-${n}`, name: `Zone ${n}`, weight: 2, bbox };
-    setZones((current) => [...current, zone]);
-    setSelectedId(zone.id);
+    if (!group) {
+      setError('Pick a group first, or create one — a zone has to live in a group.');
+      return;
+    }
+    const id = uniqueId('zone');
+    const created: Zone = { id, name: `Box ${group.zones.length + 1}`, weight: 1, bbox };
+    patchGroup(group.id, { zones: [...group.zones, created] });
+    setZoneId(id);
     setTestResult(null);
+    setError(null);
   };
 
   const save = async () => {
     try {
-      const result = await api<{ persisted: boolean; source: string }>('/api/admin/zones', password, {
+      const result = await api<{ persisted: boolean }>('/api/admin/zones', password, {
         method: 'PUT',
-        body: JSON.stringify({ zones }),
+        body: JSON.stringify({ groups }),
       });
       setStatus(
         result.persisted
-          ? 'Saved. These zones will be used by every game from now on, including after a restart.'
-          : 'Applied to this server, but NOT saved anywhere — it will revert when the server restarts. Copy the JSON below.',
+          ? 'Saved. Every game from now on uses these, including after a restart.'
+          : 'Applied to this server only — it reverts on restart. Copy the JSON and set ZONES_JSON.',
       );
       setError(null);
       await load(password);
@@ -106,15 +144,16 @@ export function Admin() {
   };
 
   const testZone = async () => {
-    if (!selected) return;
+    if (!zone) return;
     setTesting(true);
     setTestResult(null);
     try {
-      const result = await api<TestResult>('/api/admin/test-zone', password, {
-        method: 'POST',
-        body: JSON.stringify({ bbox: selected.bbox, samples: 12 }),
-      });
-      setTestResult(result);
+      setTestResult(
+        await api<TestResult>('/api/admin/test-zone', password, {
+          method: 'POST',
+          body: JSON.stringify({ bbox: zone.bbox, samples: 12 }),
+        }),
+      );
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -157,15 +196,21 @@ export function Admin() {
     );
   }
 
-  const totalWeight = zones.reduce((sum, z) => sum + Number(z.weight || 0), 0);
+  const groupShare = (g: Group) => (totalWeight > 0 ? (g.weight / totalWeight) * 100 : 0);
+  const zoneShare = (g: Group, z: Zone) => {
+    const inner = g.zones.reduce((sum, item) => sum + Number(item.weight || 0), 0);
+    return inner > 0 ? (groupShare(g) * z.weight) / inner : 0;
+  };
 
   return (
     <main className="admin">
       <header className="admin__head">
         <h1>Zone editor</h1>
         <p className="hint">
-          <strong>Shift-drag</strong> the map to draw a zone. {zones.length} zones, source:{' '}
-          <code>{loaded.source}</code>, store: <code>{loaded.persistence}</code>
+          A <strong>group</strong> competes for a round; one of its <strong>boxes</strong> is then
+          drawn. <strong>Shift-drag</strong> the map to add a box to the selected group.{' '}
+          {groups.length} groups, source: <code>{loaded.source}</code>, store:{' '}
+          <code>{loaded.persistence}</code>
         </p>
       </header>
 
@@ -173,103 +218,164 @@ export function Admin() {
       {error && <p className="notice notice--error" role="alert">{error}</p>}
       {loaded.persistence === 'none' && (
         <p className="hint hint--warn">
-          No store configured, so saves live only until the server restarts. Set{' '}
-          <code>ZONES_KV_URL</code> and <code>ZONES_KV_TOKEN</code> to make them permanent, or
-          paste the JSON below into the <code>ZONES_JSON</code> environment variable.
+          No store configured — saves last only until the server restarts. Set{' '}
+          <code>ZONES_KV_URL</code> and <code>ZONES_KV_TOKEN</code> to make them permanent.
         </p>
       )}
 
       <div className="admin__body">
         <ZoneMap
-          zones={zones}
-          selectedId={selectedId}
+          zones={groups.flatMap((g) =>
+            g.zones.map((z) => ({ id: z.id, name: `${g.name} — ${z.name}`, bbox: z.bbox, groupId: g.id })),
+          )}
+          selectedGroupId={groupId}
+          selectedZoneId={zoneId}
           testHits={testResult?.hits ?? []}
-          onSelect={(id) => {
-            setSelectedId(id);
+          onSelect={(zid, gid) => {
+            setGroupId(gid);
+            setZoneId(zid);
             setTestResult(null);
           }}
           onDraw={addZone}
         />
 
         <section className="admin__side">
-          <ul className="admin__list">
-            {zones.map((zone) => {
-              const share = totalWeight > 0 ? Math.round((zone.weight / totalWeight) * 100) : 0;
-              return (
-                <li
-                  key={zone.id}
-                  className={`admin__zone${zone.id === selectedId ? ' admin__zone--selected' : ''}`}
-                  onClick={() => setSelectedId(zone.id)}
-                >
-                  <span className="admin__zone-name">{zone.name}</span>
-                  <span className="admin__zone-share">{share}%</span>
-                </li>
-              );
-            })}
-          </ul>
-
-          {selected && (
-            <div className="admin__editor">
-              <label className="field">
-                <span className="field__label">Name</span>
-                <input
-                  className="input"
-                  value={selected.name}
-                  onChange={(e) =>
-                    update(selected.id, { name: e.target.value, id: slugify(e.target.value) || selected.id })
-                  }
-                />
-              </label>
-              <label className="field">
-                <span className="field__label">Weight — {selected.weight}</span>
-                <input
-                  type="range"
-                  min={1}
-                  max={10}
-                  step={1}
-                  value={selected.weight}
-                  onChange={(e) => update(selected.id, { weight: Number(e.target.value) })}
-                />
-              </label>
-              <p className="hint">
-                bbox {selected.bbox.map((n) => n.toFixed(2)).join(', ')}
-              </p>
-
-              <div className="admin__buttons">
+          <div className="admin__groups">
+            {groups.map((g) => (
+              <div key={g.id} className={`admin__group${g.id === groupId ? ' admin__group--open' : ''}`}>
                 <button
-                  className="button button--ghost"
-                  type="button"
-                  onClick={testZone}
-                  disabled={testing || loaded.imagery !== 'streetview'}
-                >
-                  {testing ? 'Testing…' : 'Test this zone'}
-                </button>
-                <button
-                  className="button button--ghost"
+                  className="admin__group-head"
                   type="button"
                   onClick={() => {
-                    setZones((c) => c.filter((z) => z.id !== selected.id));
-                    setSelectedId(null);
+                    setGroupId(g.id);
+                    setZoneId(null);
                   }}
                 >
-                  Delete
+                  <span className="admin__group-name">{g.name}</span>
+                  <span className="admin__zone-share">{groupShare(g).toFixed(0)}%</span>
                 </button>
-              </div>
 
-              {testResult && (
-                <p className={`hint${testResult.hitRate < 30 ? ' hint--warn' : ''}`}>
-                  Found coverage at {testResult.found}/{testResult.samples} points (
-                  {testResult.hitRate}%).
-                  {testResult.hitRate < 30 && ' Mostly ocean — tighten this zone.'}
-                </p>
-              )}
-              {loaded.imagery !== 'streetview' && (
-                <p className="hint">Testing needs a server-side Maps key.</p>
-              )}
-            </div>
-          )}
+                {g.id === groupId && (
+                  <div className="admin__group-body">
+                    <label className="field">
+                      <span className="field__label">Group name</span>
+                      <input
+                        className="input"
+                        value={g.name}
+                        onChange={(e) =>
+                          patchGroup(g.id, { name: e.target.value, id: slug(e.target.value, g.id) })
+                        }
+                      />
+                    </label>
+                    <label className="field">
+                      <span className="field__label">
+                        Group weight — {g.weight} ({groupShare(g).toFixed(0)}% of rounds)
+                      </span>
+                      <input
+                        type="range"
+                        min={1}
+                        max={10}
+                        value={g.weight}
+                        onChange={(e) => patchGroup(g.id, { weight: Number(e.target.value) })}
+                      />
+                    </label>
+
+                    {g.zones.length === 0 ? (
+                      <p className="hint hint--warn">
+                        No boxes yet — shift-drag the map to add one.
+                      </p>
+                    ) : (
+                      <ul className="admin__list">
+                        {g.zones.map((z) => (
+                          <li
+                            key={z.id}
+                            className={`admin__zone${z.id === zoneId ? ' admin__zone--selected' : ''}`}
+                            onClick={() => {
+                              setZoneId(z.id);
+                              setTestResult(null);
+                            }}
+                          >
+                            <span className="admin__zone-name">{z.name}</span>
+                            <span className="admin__zone-share">{zoneShare(g, z).toFixed(0)}%</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+
+                    {zone && zone.id === zoneId && (
+                      <div className="admin__editor">
+                        <label className="field">
+                          <span className="field__label">Box name</span>
+                          <input
+                            className="input"
+                            value={zone.name}
+                            onChange={(e) => patchZone(g.id, zone.id, { name: e.target.value })}
+                          />
+                        </label>
+                        <label className="field">
+                          <span className="field__label">
+                            Weight within the group — {zone.weight}
+                          </span>
+                          <input
+                            type="range"
+                            min={1}
+                            max={10}
+                            value={zone.weight}
+                            onChange={(e) => patchZone(g.id, zone.id, { weight: Number(e.target.value) })}
+                          />
+                        </label>
+                        <p className="hint">bbox {zone.bbox.map((n) => n.toFixed(2)).join(', ')}</p>
+                        <div className="admin__buttons">
+                          <button
+                            className="button button--ghost"
+                            type="button"
+                            onClick={testZone}
+                            disabled={testing || loaded.imagery !== 'streetview'}
+                          >
+                            {testing ? 'Testing…' : 'Test box'}
+                          </button>
+                          <button
+                            className="button button--ghost"
+                            type="button"
+                            onClick={() => {
+                              patchGroup(g.id, { zones: g.zones.filter((x) => x.id !== zone.id) });
+                              setZoneId(null);
+                            }}
+                          >
+                            Delete box
+                          </button>
+                        </div>
+                        {testResult && (
+                          <p className={`hint${testResult.hitRate < 30 ? ' hint--warn' : ''}`}>
+                            Coverage at {testResult.found}/{testResult.samples} points (
+                            {testResult.hitRate}%).
+                            {testResult.hitRate < 30 && ' Mostly ocean — tighten it.'}
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    <button
+                      className="button button--ghost admin__delete-group"
+                      type="button"
+                      onClick={() => {
+                        setGroups((current) => current.filter((x) => x.id !== g.id));
+                        setGroupId(null);
+                        setZoneId(null);
+                      }}
+                    >
+                      Delete group
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
 
           <div className="admin__actions">
+            <button className="button button--ghost" type="button" onClick={addGroup}>
+              New group
+            </button>
             <button className="button button--primary" type="button" onClick={save} disabled={!dirty}>
               {dirty ? 'Save zones' : 'Saved'}
             </button>
@@ -277,7 +383,7 @@ export function Admin() {
               className="button button--ghost"
               type="button"
               onClick={() => {
-                void navigator.clipboard.writeText(JSON.stringify(zones));
+                void navigator.clipboard.writeText(JSON.stringify(groups));
                 setStatus('JSON copied — paste it into ZONES_JSON to make it permanent.');
               }}
             >

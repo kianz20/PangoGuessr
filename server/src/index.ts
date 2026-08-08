@@ -10,7 +10,7 @@ import { createLocationSource, PooledLocationSource } from './locationSource';
 import { RoomStore, type Conn } from './rooms';
 import { googleMetadataFetcher } from './streetview';
 import { createZonePersistence } from './zonePersistence';
-import { validateZones, ZoneStore } from './zoneStore';
+import { validateGroups, ZoneStore } from './zoneStore';
 import { randomPointIn } from './zones';
 
 loadDotEnv();
@@ -65,7 +65,8 @@ app.get('/api/health', (_req, res) => {
     locations: locations.stats(),
     // Enough to confirm a zone store is wired up without needing the admin password.
     zones: {
-      count: zoneStore.get().length,
+      groups: zoneStore.get().length,
+      count: zoneStore.zoneCount(),
       source: zoneStore.source(),
       store: zoneStore.persistenceLabel(),
       ...(zoneStore.saveError() ? { saveError: zoneStore.saveError() } : {}),
@@ -108,7 +109,7 @@ function adminAuthorised(req: express.Request, res: express.Response): boolean {
 app.get('/api/admin/zones', (req, res) => {
   if (!adminAuthorised(req, res)) return;
   res.json({
-    zones: zoneStore.get(),
+    groups: zoneStore.get(),
     source: zoneStore.source(),
     persistence: zoneStore.persistenceLabel(),
     saveError: zoneStore.saveError(),
@@ -118,13 +119,13 @@ app.get('/api/admin/zones', (req, res) => {
 
 app.put('/api/admin/zones', async (req, res) => {
   if (!adminAuthorised(req, res)) return;
-  const result = await zoneStore.set((req.body as { zones?: unknown } | undefined)?.zones);
+  const result = await zoneStore.set((req.body as { groups?: unknown } | undefined)?.groups);
   if (!result.ok) {
     res.status(400).json({ error: result.error });
     return;
   }
   console.log(
-    `[zones] ${result.zones.length} zones applied from /admin (persisted: ${result.persisted})`,
+    `[zones] ${result.groups.length} groups applied from /admin (persisted: ${result.persisted})`,
   );
   res.json({
     ok: true,
@@ -148,13 +149,15 @@ app.post('/api/admin/test-zone', async (req, res) => {
 
   const body = req.body as { bbox?: unknown; samples?: unknown };
   // Reuse the zone validator so a drawn box is checked the same way a saved one is.
-  const validated = validateZones([{ id: 'test', name: 'test', weight: 1, bbox: body.bbox }]);
+  const validated = validateGroups([
+    { id: 'test', name: 'test', weight: 1, zones: [{ id: 'test', name: 'test', weight: 1, bbox: body.bbox }] },
+  ]);
   if (!validated.ok) {
     res.status(400).json({ error: validated.error });
     return;
   }
 
-  const zone = validated.zones[0]!;
+  const zone = validated.groups[0]!.zones[0]!;
   const samples = Math.min(Math.max(Number(body.samples) || 12, 1), 25);
   const stats = { metadataCalls: 0, misses: 0 };
   const fetcher = googleMetadataFetcher(SERVER_KEY, stats);
@@ -346,7 +349,8 @@ setInterval(() => {
 // Zones are loaded before serving, so the first game of a boot uses the saved list.
 await zoneStore.attach(createZonePersistence());
 console.log(
-  `[zones] ${zoneStore.get().length} zones active (source: ${zoneStore.source()}, ` +
+  `[zones] ${zoneStore.get().length} groups / ${zoneStore.zoneCount()} zones ` +
+    `(source: ${zoneStore.source()}, ` +
     `store: ${zoneStore.persistenceLabel()})`,
 );
 

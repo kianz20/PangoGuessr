@@ -1,4 +1,4 @@
-import type { Zone } from './zones';
+import type { ZoneGroup } from './zones';
 
 /**
  * Somewhere zone edits can be written so they survive a restart.
@@ -8,7 +8,7 @@ import type { Zone } from './zones';
  */
 export interface ZonePersistence {
   load(): Promise<unknown | null>;
-  save(zones: readonly Zone[]): Promise<void>;
+  save(groups: readonly ZoneGroup[]): Promise<void>;
   describe(): string;
 }
 
@@ -40,11 +40,11 @@ class HttpKvPersistence implements ZonePersistence {
     return JSON.parse(body.result) as unknown;
   }
 
-  async save(zones: readonly Zone[]): Promise<void> {
+  async save(groups: readonly ZoneGroup[]): Promise<void> {
     const response = await fetch(`${this.base}/set/${encodeURIComponent(KEY)}`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'text/plain' },
-      body: JSON.stringify(zones),
+      body: JSON.stringify(groups),
       signal: AbortSignal.timeout(8000),
     });
     if (!response.ok) throw new Error(`KV save failed: HTTP ${response.status}`);

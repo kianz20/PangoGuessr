@@ -388,73 +388,80 @@ running monthly total at `/api/health`. Loads should track at roughly
 `rounds × players`. If the ratio drifts above that, something is re-initialising — and
 you'll see it in a log line rather than a month-end invoice.
 
-### Location sampling: manually defined zones
+### Location sampling: weighted zone groups
 
-Locations are **not** sampled uniformly from the whole world. Coverage-weighted random
-lands overwhelmingly on featureless roads in the US, Russia, Australia and Brazil — most
-rounds end up looking alike, with few clues to read.
+Locations are **not** sampled uniformly from the whole world. Coverage-weighted random lands
+overwhelmingly on featureless roads in the US, Russia, Australia and Brazil — most rounds end
+up looking alike, with few clues to read.
 
-Instead, zones are defined by hand in a config file:
+Instead, zones are defined by hand, in **two levels**:
 
 ```ts
 // server/zones.ts
 type Zone = {
   id: string;
   name: string;
-  weight: number;                             // relative pick frequency
+  weight: number;                             // relative frequency *within its group*
   bbox: [south: number, west: number, north: number, east: number];
 };
 
-export const ZONES: Zone[] = [
-  // home advantage — everyone should recognise a few of these
-  { id: 'nz',     name: 'New Zealand',      weight: 4, bbox: [-46.7, 166.4, -34.4, 178.6] },
-  { id: 'au-e',   name: 'Australia (east)', weight: 3, bbox: [-38.5, 141.0, -25.0, 153.6] },
-
-  // distinctive signage / architecture / driving side
-  { id: 'jp',     name: 'Japan',            weight: 3, bbox: [ 31.0, 130.0,  45.5, 145.8] },
-  { id: 'uk-ie',  name: 'UK & Ireland',     weight: 3, bbox: [ 50.0, -10.5,  58.7,   1.8] },
-  { id: 'it',     name: 'Italy',            weight: 2, bbox: [ 36.6,   6.6,  47.1,  18.5] },
-  { id: 'es-pt',  name: 'Iberia',           weight: 2, bbox: [ 36.0,  -9.5,  43.8,   3.3] },
-  { id: 'alps',   name: 'Alps',             weight: 2, bbox: [ 45.8,   5.9,  49.0,  17.2] },
-  { id: 'nordic', name: 'Norway & Sweden',  weight: 2, bbox: [ 57.0,   4.5,  71.2,  31.0] },
-  { id: 'is',     name: 'Iceland',          weight: 1, bbox: [ 63.2, -24.6,  66.6, -13.5] },
-
-  // wider world — keeps the map honest
-  { id: 'us-w',   name: 'US (west)',        weight: 3, bbox: [ 32.5,-124.4,  49.0,-110.0] },
-  { id: 'br-se',  name: 'Brazil (SE)',      weight: 2, bbox: [-25.5, -51.0, -19.5, -39.5] },
-  { id: 'za',     name: 'South Africa',     weight: 2, bbox: [-34.9,  17.0, -22.1,  32.9] },
-  { id: 'th',     name: 'Thailand',         weight: 2, bbox: [  5.6,  97.3,  20.5, 105.6] },
-  { id: 'cl',     name: 'Chile',            weight: 1, bbox: [-42.0, -75.0, -30.0, -69.8] },
-];
+type ZoneGroup = {
+  id: string;
+  name: string;
+  weight: number;                             // relative frequency against other groups
+  zones: Zone[];
+};
 ```
 
-Starter set of 14, chosen for **variety of visual cues** rather than even geographic
-coverage: mixed driving sides, distinct road markings and sign shapes, and vegetation
-ranging from Icelandic tundra to Thai jungle. New Zealand is weighted highest so there are
-recognisable home rounds. All have solid Street View coverage.
-
-These are a starting point — expect to tune weights after playing a few games.
+A **group** is what competes for a round; one of its **boxes** is then drawn by inner weight.
+That split is what lets a country be one entry in the odds while being made of several tight
+boxes: New Zealand can be five small boxes around the places worth seeing and still take 13%
+of rounds, rather than those five boxes each competing separately against every other
+country. Without grouping, tightening a zone by splitting it silently multiplies how often it
+comes up.
 
 Selection per round:
 
-1. Weighted-random pick of a zone.
-2. Uniform-random lat/lng inside its bbox.
-3. Metadata lookup **with `radius: 5000`** — this asks for the nearest panorama within
-   5km rather than an exact hit, which raises the success rate enormously. Without a
-   radius, a random point almost never lands exactly on a road.
-4. On miss, retry from step 2. After ~15 misses, fall back to a different zone.
+1. Weighted-random pick of a **group**.
+2. Weighted-random pick of a **zone** inside it.
+3. Uniform-random lat/lng inside that zone's bbox.
+4. Metadata lookup **with `radius: 5000`** — this asks for the nearest panorama within 5km
+   rather than an exact hit, which raises the success rate enormously. Without a radius, a
+   random point almost never lands on a road.
+5. On miss, retry. After ~15 misses, re-draw a different group and zone entirely.
 
-**Why bboxes and not polygons:** a rectangle over New Zealand includes a lot of ocean,
-and ocean simply fails the metadata check and retries. Since metadata calls are free,
-retrying is cheaper than maintaining country border geometry. Only worth revisiting if a
-zone is so ocean-heavy that retries get slow.
+### Naming the location on the reveal
 
-Keep zones **small and distinctive**. "Europe" as one bbox reproduces the original
-problem at smaller scale; a dozen country-sized zones with weights you tune by taste is
-what makes rounds feel varied and deliberately chosen.
+The reveal names the **nearest settlement**, resolved from a GeoNames extract bundled with the
+server (`server/data/places.tsv.gz`, ~170k places over 1,000 population). No API, no key, no
+quota, no latency, and it works with the network down — which matters when the imagery already
+depends on one external service. Rebuild it with `server/scripts/build-cities.mjs`.
 
-This config also gives themed games later — a `zoneSet` per room ("World", "Europe
-only", "Asia") is just a filter over the same list.
+Two rules make the names read the way a person would say them:
+
+- **Within 30km the most populous candidate wins, not the closest.** The dataset lists suburbs
+  as places in their own right, so nearest-wins named central Tokyo "Eifuku". Nobody describes
+  where they are by naming the suburb.
+- **Past 5km the distance is stated**, not hidden: "25 km from Alexandra, New Zealand". Naming a
+  town 90km away as if it were the location would simply be wrong, and knowing the answer was
+  rural is useful information.
+
+Somewhere with nothing within 400km — a mid-ocean road — falls back to the **group** name, so
+the worst case is the zone it was drawn from.
+
+GeoNames is CC BY 4.0, so the reveal carries an attribution line.
+
+**Why bboxes and not polygons:** a rectangle over New Zealand includes a lot of ocean, and
+ocean simply fails the metadata check and retries. Since metadata calls are free, retrying is
+cheaper than maintaining country border geometry. Only worth revisiting if a zone is so
+ocean-heavy that retries get slow.
+
+Keep boxes **small and distinctive**. "Europe" as one bbox reproduces the original problem at
+smaller scale; a dozen country-sized groups with weights you tune by taste is what makes
+rounds feel varied and deliberately chosen.
+
+A bare list of zones with no groups is still accepted anywhere zones are read, and becomes a
+group of one each — the odds come out identical.
 
 ### Admin zone editor
 
@@ -685,7 +692,7 @@ miserable.
 - [x] ~~Load headroom~~ — **6s (46s backstop)**, §5
 - [x] ~~Rounds per game~~ — **5**, §1
 - [x] ~~Pannable vs frozen~~ — **pannable, movement disabled**, §7
-- [x] ~~Location sampling~~ — **hand-defined weighted zones**, §7
+- [x] ~~Location sampling~~ — **hand-defined weighted zone groups**, §7
 - [x] ~~Mid-game joins~~ — **blocked**, §4
 - [x] ~~Leaderboard ties~~ — **allowed, no tiebreak**, §6
 - [x] ~~Reveal map pins~~ — **all players' pins shown**, §4

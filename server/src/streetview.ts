@@ -1,5 +1,5 @@
 import type { LatLng } from '@pangoguessr/shared';
-import { pickZone, randomPointIn, type Zone } from './zones';
+import { pickGroup, pickZone, randomPointIn, type ZoneGroup } from './zones';
 
 /**
  * Asks for the nearest panorama within 5km rather than an exact hit, which raises the
@@ -16,7 +16,9 @@ export type PanoramaHit = {
   panoId: string;
   at: LatLng;
   zoneId: string;
+  /** The group's name — that's the human-meaningful geography for the reveal (§4). */
   zoneName: string;
+  groupId: string;
 };
 
 /** Injectable so sampling can be tested without touching the network or a billing account. */
@@ -65,23 +67,36 @@ export function googleMetadataFetcher(apiKey: string, stats: SampleStats): Metad
 }
 
 /**
- * Weighted-random zone, uniform point inside it, metadata lookup, retry on miss, fall back
- * to a different zone after too many misses (§7).
+ * Weighted-random **group**, then a weighted-random zone inside it, then a uniform point in
+ * that zone's box, a metadata lookup, and a retry on miss. After too many misses it re-draws
+ * — a different group and zone entirely (§7).
+ *
+ * The two levels are what let a country be one entry in the odds while being made of several
+ * tight boxes, instead of each box competing separately against every other country.
  */
 export async function samplePanorama(
-  zones: readonly Zone[],
+  groups: readonly ZoneGroup[],
   fetcher: MetadataFetcher,
   stats: SampleStats,
   random = Math.random,
 ): Promise<PanoramaHit | null> {
-  // Two zone attempts: if a zone is that ocean-heavy it should be tightened, not retried
-  // indefinitely.
-  for (let zoneAttempt = 0; zoneAttempt < 2; zoneAttempt++) {
-    const zone = pickZone(zones, random);
+  const usable = groups.filter((group) => group.zones.length > 0);
+  if (usable.length === 0) return null;
+
+  // Two draws: if a zone is that ocean-heavy it should be tightened, not retried forever.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const group = pickGroup(usable, random);
+    const zone = pickZone(group.zones, random);
     for (let miss = 0; miss < MAX_MISSES_PER_ZONE; miss++) {
       const hit = await fetcher(randomPointIn(zone, random), SEARCH_RADIUS_M);
       if (hit) {
-        return { panoId: hit.panoId, at: hit.at, zoneId: zone.id, zoneName: zone.name };
+        return {
+          panoId: hit.panoId,
+          at: hit.at,
+          zoneId: zone.id,
+          zoneName: group.name,
+          groupId: group.id,
+        };
       }
       stats.misses++;
     }

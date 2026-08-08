@@ -114,6 +114,14 @@ export function Results({
         </section>
       </div>
 
+      <p className="attribution">
+        Place names ©{' '}
+        <a href="https://www.geonames.org/" target="_blank" rel="noreferrer">
+          GeoNames
+        </a>{' '}
+        (CC BY 4.0)
+      </p>
+
       {/* Sticky: the whole room is waiting on this button, so the host must never have to
           scroll to find it. */}
       <footer className="results__actions results__actions--sticky">

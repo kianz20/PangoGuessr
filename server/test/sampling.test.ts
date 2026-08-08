@@ -8,7 +8,7 @@ import {
   type MetadataFetcher,
   type SampleStats,
 } from '../src/streetview';
-import { ZONES, pickZone, randomPointIn, type Zone } from '../src/zones';
+import { ZONE_GROUPS, allZones, pickGroup, pickZone, randomPointIn, type Zone, type ZoneGroup } from '../src/zones';
 
 const stats = (): SampleStats => ({ metadataCalls: 0, misses: 0 });
 
@@ -19,7 +19,7 @@ function sequence(values: number[]) {
 }
 
 test('every zone bbox is well formed and on the planet', () => {
-  for (const zone of ZONES) {
+  for (const zone of allZones(ZONE_GROUPS)) {
     const [south, west, north, east] = zone.bbox;
     assert.ok(south < north, `${zone.id}: south below north`);
     assert.ok(west < east, `${zone.id}: west below east`);
@@ -27,11 +27,18 @@ test('every zone bbox is well formed and on the planet', () => {
     assert.ok(west >= -180 && east <= 180, `${zone.id}: longitude in range`);
     assert.ok(zone.weight > 0, `${zone.id}: positive weight`);
   }
-  assert.equal(new Set(ZONES.map((z) => z.id)).size, ZONES.length, 'ids are unique');
+  const ids = allZones(ZONE_GROUPS).map((z) => z.id);
+  assert.equal(new Set(ids).size, ids.length, 'zone ids are unique across all groups');
+  const groupIds = ZONE_GROUPS.map((g) => g.id);
+  assert.equal(new Set(groupIds).size, groupIds.length, 'group ids are unique');
+  for (const group of ZONE_GROUPS) {
+    assert.ok(group.zones.length > 0, `${group.id} has at least one zone`);
+    assert.ok(group.weight > 0, `${group.id} has a positive weight`);
+  }
 });
 
 test('a sampled point always lands inside its zone', () => {
-  for (const zone of ZONES) {
+  for (const zone of allZones(ZONE_GROUPS)) {
     for (let i = 0; i < 50; i++) {
       const point = randomPointIn(zone);
       const [south, west, north, east] = zone.bbox;
@@ -50,6 +57,70 @@ test('zone picking respects weights', () => {
   for (let i = 0; i < 10_000; i++) if (pickZone(zones).id === 'heavy') heavy++;
   // 9:1 weighting, so ~90%. Wide bounds keep this from being flaky.
   assert.ok(heavy > 8_500 && heavy < 9_500, `heavy picked ${heavy}/10000`);
+});
+
+test('a group is picked by group weight, then a zone by its weight within the group', () => {
+  const groups: ZoneGroup[] = [
+    {
+      id: 'nz',
+      name: 'New Zealand',
+      weight: 3,
+      zones: [
+        { id: 'nz-north', name: 'North', weight: 3, bbox: [-39, 174, -35, 176] },
+        { id: 'nz-south', name: 'South', weight: 1, bbox: [-46, 167, -42, 171] },
+      ],
+    },
+    {
+      id: 'jp',
+      name: 'Japan',
+      weight: 1,
+      zones: [{ id: 'jp-all', name: 'Japan', weight: 1, bbox: [31, 130, 45, 145] }],
+    },
+  ];
+
+  const counts: Record<string, number> = { 'nz-north': 0, 'nz-south': 0, 'jp-all': 0 };
+  const runs = 40_000;
+  for (let i = 0; i < runs; i++) {
+    const group = pickGroup(groups);
+    counts[pickZone(group.zones).id]!++;
+  }
+
+  // Group odds are 3:1, so NZ takes 75% of rounds regardless of how many boxes it contains —
+  // that's the whole point of grouping. Within NZ the 3:1 split gives 56.25% and 18.75%.
+  const share = (id: string) => (counts[id]! / runs) * 100;
+  assert.ok(Math.abs(share('nz-north') - 56.25) < 1.5, `north ${share('nz-north').toFixed(1)}%`);
+  assert.ok(Math.abs(share('nz-south') - 18.75) < 1.5, `south ${share('nz-south').toFixed(1)}%`);
+  assert.ok(Math.abs(share('jp-all') - 25) < 1.5, `japan ${share('jp-all').toFixed(1)}%`);
+});
+
+test('adding boxes to a group does not increase how often that group comes up', () => {
+  const one: ZoneGroup[] = [
+    { id: 'a', name: 'A', weight: 1, zones: [{ id: 'a1', name: 'a1', weight: 1, bbox: [0, 0, 1, 1] }] },
+    { id: 'b', name: 'B', weight: 1, zones: [{ id: 'b1', name: 'b1', weight: 1, bbox: [0, 0, 1, 1] }] },
+  ];
+  const many: ZoneGroup[] = [
+    {
+      id: 'a',
+      name: 'A',
+      weight: 1,
+      zones: [
+        { id: 'a1', name: 'a1', weight: 1, bbox: [0, 0, 1, 1] },
+        { id: 'a2', name: 'a2', weight: 1, bbox: [0, 0, 1, 1] },
+        { id: 'a3', name: 'a3', weight: 1, bbox: [0, 0, 1, 1] },
+        { id: 'a4', name: 'a4', weight: 1, bbox: [0, 0, 1, 1] },
+        { id: 'a5', name: 'a5', weight: 1, bbox: [0, 0, 1, 1] },
+      ],
+    },
+    { id: 'b', name: 'B', weight: 1, zones: [{ id: 'b1', name: 'b1', weight: 1, bbox: [0, 0, 1, 1] }] },
+  ];
+
+  const shareOfA = (groups: ZoneGroup[]) => {
+    let a = 0;
+    for (let i = 0; i < 20_000; i++) if (pickGroup(groups).id === 'a') a++;
+    return (a / 20_000) * 100;
+  };
+  assert.ok(Math.abs(shareOfA(one) - 50) < 2);
+  assert.ok(Math.abs(shareOfA(many) - 50) < 2, 'five boxes still means 50% of rounds');
 });
 
 test('a boundary ticket cannot fall through to the wrong zone', () => {
@@ -72,7 +143,7 @@ test('sampling retries past misses and reports them', () => {
     return { panoId: 'PANO_XYZ', at: point };
   };
 
-  return samplePanorama(ZONES, fetcher, s).then((hit) => {
+  return samplePanorama(ZONE_GROUPS, fetcher, s).then((hit) => {
     assert.ok(hit);
     assert.equal(hit.panoId, 'PANO_XYZ');
     assert.equal(s.misses, 3, 'three ocean hits counted as misses');
@@ -88,7 +159,7 @@ test('sampling gives up after exhausting two zones rather than looping forever',
     return null;
   };
 
-  const hit = await samplePanorama(ZONES, allOcean, s);
+  const hit = await samplePanorama(ZONE_GROUPS, allOcean, s);
   assert.equal(hit, null);
   assert.equal(calls, 30, '15 misses per zone, two zones');
 });
@@ -98,7 +169,7 @@ test('a denied key surfaces as an error instead of an endless retry', async () =
   const denied: MetadataFetcher = async () => {
     throw new Error('Street View metadata status REQUEST_DENIED');
   };
-  await assert.rejects(() => samplePanorama(ZONES, denied, s), /REQUEST_DENIED/);
+  await assert.rejects(() => samplePanorama(ZONE_GROUPS, denied, s), /REQUEST_DENIED/);
 });
 
 test('the pool refuses to deal until it holds a full game', async () => {
@@ -106,7 +177,7 @@ test('the pool refuses to deal until it holds a full game', async () => {
   let n = 0;
   const fetcher: MetadataFetcher = async (point) => ({ panoId: `PANO_${n++}`, at: point });
 
-  const pool = new PooledLocationSource(fetcher, s, () => ZONES, ROUNDS_PER_GAME);
+  const pool = new PooledLocationSource(fetcher, s, () => ZONE_GROUPS, ROUNDS_PER_GAME);
   // Nothing pre-warmed yet: better an honest refusal than a hung Start button.
   assert.equal(pool.take(ROUNDS_PER_GAME), null);
 
@@ -131,7 +202,7 @@ test('a failing fetcher backs off instead of hammering the API', async () => {
     throw new Error('boom');
   };
 
-  const pool = new PooledLocationSource(broken, s, () => ZONES, 5);
+  const pool = new PooledLocationSource(broken, s, () => ZONE_GROUPS, 5);
   await pool.warm();
   const afterFirst = calls;
   assert.ok(afterFirst > 0, 'it tried');
@@ -214,7 +285,7 @@ test('the fixed source works with no key at all', () => {
 
 test('sampling is deterministic given a deterministic random source', async () => {
   const fetcher: MetadataFetcher = async (point) => ({ panoId: 'P', at: point });
-  const first = await samplePanorama(ZONES, fetcher, stats(), sequence([0.1, 0.2, 0.3]));
-  const second = await samplePanorama(ZONES, fetcher, stats(), sequence([0.1, 0.2, 0.3]));
+  const first = await samplePanorama(ZONE_GROUPS, fetcher, stats(), sequence([0.1, 0.2, 0.3]));
+  const second = await samplePanorama(ZONE_GROUPS, fetcher, stats(), sequence([0.1, 0.2, 0.3]));
   assert.deepEqual(first, second);
 });
