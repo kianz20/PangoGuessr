@@ -30,16 +30,6 @@ async function api<T>(path: string, password: string, init?: RequestInit): Promi
   return body;
 }
 
-function slug(name: string, fallback: string): string {
-  return (
-    name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '')
-      .slice(0, 32) || fallback
-  );
-}
-
 /**
  * Desktop-only zone editor (§7). Typing bounding boxes by hand is tedious and error-prone,
  * and the whole quality of the game lives in this list.
@@ -262,9 +252,10 @@ export function Admin() {
                       <input
                         className="input"
                         value={g.name}
-                        onChange={(e) =>
-                          patchGroup(g.id, { name: e.target.value, id: slug(e.target.value, g.id) })
-                        }
+                        // Name only — never the id. Ids are internal handles that selection,
+                        // the map and the zone list are all keyed by; re-deriving one from the
+                        // name meant every keystroke renamed the group out from under them.
+                        onChange={(e) => patchGroup(g.id, { name: e.target.value })}
                       />
                     </label>
                     <label className="field">
