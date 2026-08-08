@@ -350,6 +350,7 @@ export function useRoom() {
   const kick = useCallback((playerId: string) => send({ type: 'kick', playerId }), [send]);
   const startRound = useCallback(() => send({ type: 'startRound' }), [send]);
   const advance = useCallback(() => send({ type: 'advance' }), [send]);
+  const cancelGame = useCallback(() => send({ type: 'cancelGame' }), [send]);
 
   const submitGuess = useCallback(
     (at: LatLng, elapsedMs: number) => {
@@ -378,6 +379,7 @@ export function useRoom() {
     kick,
     startRound,
     advance,
+    cancelGame,
     submitGuess,
     setNotice,
   };

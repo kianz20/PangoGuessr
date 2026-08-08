@@ -184,6 +184,16 @@ function handleMessage(conn: Conn, msg: ClientMessage): void {
       return;
     }
 
+    case 'cancelGame': {
+      const result = store.cancelGame(conn);
+      if (!result.ok) {
+        conn.send({ type: 'error', code: result.code, message: result.message });
+        return;
+      }
+      console.log(`[room ${result.room.code}] game cancelled by host`);
+      return;
+    }
+
     case 'advance': {
       const result = store.advance(conn);
       if (!result.ok) {

@@ -80,6 +80,7 @@ export type ClientMessage =
   | { type: 'kick'; playerId: string } // host only
   | { type: 'startRound' } // host only
   | { type: 'advance' } // host only
+  | { type: 'cancelGame' } // host only — abandon mid-game, back to the lobby
   | { type: 'submitGuess'; lat: number; lng: number; elapsedMs: number };
 
 export type ServerMessage =

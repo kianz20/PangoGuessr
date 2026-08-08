@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ROUNDS_PER_GAME, ROUND_MS, accuracyScore, scoreGuess } from '@pangoguessr/shared';
+import { ROUNDS_PER_GAME, ROUND_MS, scoreGuess } from '@pangoguessr/shared';
 import type { ServerMessage } from '@pangoguessr/shared';
 import { RoomStore, type Conn, type Scheduler } from '../src/rooms';
 
@@ -171,7 +171,7 @@ test('a duplicate guess is ignored rather than double-counted', () => {
   assert.equal(mine!.guess!.lat, -41.3, 'the first guess is the one that counts');
 });
 
-test('elapsedMs is clamped, so a forged stopwatch cannot beat an honest fast guess', () => {
+test('the clock has no bearing on the score', () => {
   const { store, host, guests } = setup(['A']);
   store.startRound(host.conn);
 
@@ -182,10 +182,49 @@ test('elapsedMs is clamped, so a forged stopwatch cannot beat an honest fast gue
 
   const fast = end.results.find((r) => r.playerId === host.player.id)!;
   const slow = end.results.find((r) => r.playerId === guests[0]!.player.id)!;
-  assert.equal(fast.elapsedMs, 0, 'negative clamps to 0');
+  assert.equal(fast.elapsedMs, 0, 'negative clamps to 0 for display');
   assert.equal(slow.elapsedMs, ROUND_MS, 'absurd clamps to the full round');
-  // Same distance, so the gap is exactly the speed multiplier's 40% floor.
-  assert.equal(slow.points, Math.round(fast.points * 0.6));
+  // Identical guesses score identically, so a forged stopwatch buys nothing.
+  assert.equal(slow.points, fast.points);
+  assert.ok(fast.points > 0);
+});
+
+test('the host can cancel a game mid-round, unlocking the room', () => {
+  const { store, room, clock, host, guests } = setup(['A']);
+  store.startRound(host.conn);
+  store.submitGuess(host.conn, -41.3, 174.8, 1_000);
+  assert.equal(clock.pendingCount, 1, 'backstop armed');
+
+  const denied = store.cancelGame(guests[0]!.conn);
+  assert.equal(denied.ok, false);
+  if (!denied.ok) assert.equal(denied.code, 'NOT_HOST');
+
+  assert.ok(store.cancelGame(host.conn).ok);
+  assert.equal(room.phase, 'LOBBY');
+  assert.equal(room.round, null);
+  assert.deepEqual(room.deck, []);
+  assert.ok([...room.players.values()].every((p) => p.score === 0), 'scores cleared');
+  // Leaving this armed would fire into an idle lobby.
+  assert.equal(clock.pendingCount, 0, 'the round backstop is cancelled too');
+
+  // Anyone held out by the lock can now join (§4).
+  assert.ok(store.join(new FakeConn(), room.code, 'Late', 'sess-late').ok);
+  // And a fresh game can start.
+  assert.ok(store.startRound(host.conn).ok);
+  assert.equal(room.roundIndex, 0);
+});
+
+test('cancelling from the podium is refused — that is what Play again is for', () => {
+  const { store, room, host, guests } = setup(['A']);
+  const nothingToCancel = store.cancelGame(host.conn);
+  assert.equal(nothingToCancel.ok, false);
+  if (!nothingToCancel.ok) assert.equal(nothingToCancel.code, 'WRONG_PHASE');
+
+  store.startRound(host.conn);
+  store.submitGuess(host.conn, 0, 0, 0);
+  store.submitGuess(guests[0]!.conn, 1, 1, 0);
+  assert.equal(room.phase, 'ROUND_RESULTS');
+  assert.ok(store.cancelGame(host.conn).ok, 'but mid-results is fair game');
 });
 
 test('a guess with no coordinates is rejected, not scored as 0,0', () => {
@@ -329,13 +368,16 @@ test('no score leaks to any client during a round', () => {
   assert.equal(guests[0]!.conn.countOfType('guessAck'), 0, "not told about others' guesses");
 });
 
-test('the scoring curve rewards precision, not just the right country', () => {
-  // The GeoGuessr-style exponential put 1km and 10km within 5 points of each other (§6).
-  assert.ok(accuracyScore(1) - accuracyScore(10) > 300, 'street beats suburb by a real margin');
-  assert.ok(accuracyScore(10) - accuracyScore(100) > 300, 'suburb beats city');
-  assert.ok(accuracyScore(0) === 5000);
-  assert.equal(accuracyScore(30_000), 0, 'floors rather than going negative');
-  // Speed only ever amplifies accuracy already earned (§6).
-  assert.equal(scoreGuess(0, 0), 5000);
-  assert.equal(scoreGuess(0, ROUND_MS), 3000);
+test('scoring is distance alone, decaying with distance', () => {
+  assert.equal(scoreGuess(0), 5000, 'a perfect guess scores full marks');
+  assert.ok(scoreGuess(1000) > 2000, 'the right region still banks a solid score');
+  assert.equal(scoreGuess(20_000), 0, 'the far side of the planet scores nothing');
+  assert.equal(scoreGuess(-5), 5000, 'a negative distance cannot exceed the maximum');
+
+  let previous = Infinity;
+  for (let d = 0; d <= 20_000; d += 250) {
+    const value = scoreGuess(d);
+    assert.ok(value <= previous, `curve must never reward a worse guess (at ${d}km)`);
+    previous = value;
+  }
 });

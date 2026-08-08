@@ -1,9 +1,10 @@
 # PangoGuessr — Architecture
 
 A GeoGuessr-style party game. Players join a room from their own phones, each sees the
-same location, and scores individually on **accuracy + speed**.
+same location, and scores individually on **accuracy**.
 
-Status: design doc, pre-implementation.
+Status: implemented through step 3 of the build order (§10) — lobby, round loop and
+Street View sampling. The admin zone editor (§7) is not built.
 
 ---
 
@@ -14,7 +15,7 @@ Status: design doc, pre-implementation.
 | Play model | **Every player on their own phone.** No shared/TV screen. |
 | Rounds per game | **5** |
 | Round length | **40 seconds** per player, **46s** room backstop; ends early once all have guessed |
-| Scoring | Distance curve, scaled down by time taken |
+| Scoring | Distance curve (GeoGuessr's), accuracy only |
 | Joining | 4-character room code, or QR code encoding the same join URL |
 | Room size | Up to **20 players** (~16 typical) |
 | Imagery | **Google Maps JS API + Street View** |
@@ -162,6 +163,17 @@ So a step with nobody on it is a normal state, not a special case.
 From here the room returns to `LOBBY` with scores reset, same code and players, so a group
 can immediately play again.
 
+### Cancelling a game
+
+The host can abandon a game from any phase and drop the room back to `LOBBY`, scores
+cleared and the room unlocked so anyone held out by the lock can join. It's the escape
+hatch for a game started too early, with the wrong people, or that nobody wants to finish —
+without it the only way out of a five-round game is to play it.
+
+It clears the round's backstop timer along with the round, or it would fire into an idle
+lobby. The button takes two taps, since it wipes everyone's scores and lives next to
+controls the host uses every round.
+
 ### The stall risk — the host leaving drops the room
 
 Host-gating means one person's phone can freeze the room indefinitely: if the host's
@@ -188,16 +200,16 @@ is the upgrade path.
 **Each player's 40 seconds starts when their own panorama finishes rendering.**
 
 This is the fairness fix. A player on slow 4G may not see the image for 3–4 seconds after
-the server broadcasts. Timing from the broadcast would cost them ~10% of the round, and
-because speed is a multiplier (§6), it would penalise them twice. With 20 phones all
-pulling panorama tiles simultaneously, this is most rounds, not an edge case.
+the server broadcasts. Timing from the broadcast would cost them ~10% of their looking
+time, on a round where reading the landscape is the whole task. With 20 phones all pulling
+panorama tiles simultaneously, this is most rounds, not an edge case.
 
 So timing is **client-measured**:
 
 - The client starts a local stopwatch on the Street View viewer's `pano_changed` /
   first-tile-rendered event — not on message receipt.
 - `submitGuess` carries `{ lat, lng, elapsedMs }`.
-- The server **clamps `elapsedMs` to 0–40000** and computes distance and score from it.
+- The server **clamps `elapsedMs` to 0–40000** and records it alongside the guess.
 
 ### Placing a guess
 
@@ -222,8 +234,8 @@ the *actual coordinates*, which means broadcasting the answer to 20 phones befor
 are locked. Anyone could read it in devtools. In a room of 20 people playing a guessing
 game, someone will do this as a joke.
 
-The split keeps that closed. The worst a client can fake is its own stopwatch — capped at
-a 40% swing by the speed multiplier — instead of knowing the answer outright.
+Since the score depends only on distance (§6), a client-measured clock is nothing worth
+faking — the worst a forged `elapsedMs` can do is misreport a stat on the reveal.
 
 ### The room clock is still server-owned
 
@@ -276,65 +288,37 @@ assert the round closes when the remaining two have guessed.
 
 ```ts
 // shared/scoring.ts
-const MAX_KM  = 20000;   // ~antipodal — accuracy floors at zero here
-const NEAR_KM = 0.5;     // below this, treat as a bullseye
+const WORLD_KM = 14916;
 
-export function scoreGuess(distanceKm: number, elapsedMs: number): number {
+export function scoreGuess(distanceKm: number): number {
   const d = Math.max(distanceKm, 0);
-  const decay = Math.log10(1 + d / NEAR_KM) / Math.log10(1 + MAX_KM / NEAR_KM);
-  const accuracy = 5000 * Math.max(0, 1 - decay);
-  const t = Math.min(Math.max(elapsedMs, 0) / 40000, 1);   // clamped: client-reported
-  return Math.round(accuracy * (1 - 0.4 * t));
+  return Math.round(5000 * Math.exp(-10 * d / WORLD_KM));
 }
 ```
 
-Runs on the server only. `elapsedMs` arrives from the client (§5) and is clamped here, so
-the clamp cannot be bypassed by any caller. The client may import this to *preview* a
-score, but never to decide one — it doesn't have the actual coordinates to pass in.
+GeoGuessr's world curve. Runs on the server only — the client never has the actual
+coordinates to pass in.
 
-### Why log distance and not the GeoGuessr curve
-
-The obvious formula is GeoGuessr's own, `5000 * exp(-10d / 14916)`. It was rejected because
-it measures error as a **fraction of the planet**, which makes every city-sized miss
-identical: a 1 km guess scores 4997 and a 10 km guess 4967. Local precision — actually
-reading the signs and finding the street — is worth 5 points out of 5000. Raising the
-exponent punishes mid-range misses harder but doesn't fix that flatness, because the
-flatness is the shape, not the constant.
-
-Log distance is **scale-free**: every halving of the error is worth the same amount,
-whether you're 4000 km out or 400 m out.
-
-| Miss | Accuracy | Reads as |
+| Miss | Points | Reads as |
 | --- | --- | --- |
-| 0.5 km | 4673 | nailed the street |
-| 5 km | 3868 | right suburb |
-| 50 km | 2823 | right city |
-| 500 km | 1740 | right region |
-| 2000 km | 1087 | right continent, wrong country |
-| 10000 km | 327 | wrong hemisphere |
+| 0 km | 5000 | perfect |
+| 50 km | 4835 | right city |
+| 250 km | 4228 | right region |
+| 1000 km | 2558 | right continent |
+| 2000 km | 1308 | wrong country, right hemisphere |
+| 5000 km | 175 | lost |
+| 14916 km+ | ~0 | the other side of the planet |
 
-Two knobs. **`NEAR_KM`** sets how much a pinpoint guess earns over a merely-close one —
-lower rewards precision more. **`MAX_KM`** sets where hopeless guesses floor out; drop it
-to ~8000 if a wrong-hemisphere guess should be worth nothing. It's deliberately left
-generous at long range: with 5 rounds, zeroing people out early kills the podium.
+**Accuracy is the only thing that scores.** How long a player takes has no bearing on their
+points: taking time buys a better guess, not a worse one. The round still ends the moment
+everyone has guessed (§5), so there is no incentive to sit on a decision.
 
-Note this is *less* punishing than the exponential at long range and *far* more
-discriminating up close, which is the intended trade.
-
-### Speed
-
-Speed is **multiplicative, on a floor** — an instant guess keeps 100% of its accuracy
-score, a guess at the 40s buzzer keeps 60%.
-
-This is deliberate. An *additive* speed bonus would let a player fire off a fast garbage
-guess and out-earn someone slow and accurate, which feels awful to play. Multiplicative
-means speed only ever amplifies accuracy you already earned.
-
-The `0.4` is the main tuning knob. Raise it to make the game more frantic.
+`elapsedMs` still travels with a guess and is shown on the reveal, but nothing depends on
+it — which is why a client-measured stopwatch is safe to trust.
 
 **Ties are allowed.** No tiebreak on the final leaderboard — equal totals share a rank and
-are displayed as such. With a continuous distance curve and millisecond timing, exact ties
-are vanishingly rare anyway; not having a rule is simpler than having one.
+are displayed as such. With a continuous distance curve, exact ties are vanishingly rare
+anyway; not having a rule is simpler than having one.
 
 ---
 
@@ -688,7 +672,7 @@ miserable.
 
 1. **Zone weights.** The starter 14 in §7 are a guess. Pure tuning — play a few games and
    adjust. Never really "answered."
-2. **Scoring knobs.** `NEAR_KM` and `MAX_KM` (§6) are tuning, same as zone weights.
+2. **Round length.** 40 seconds is a guess until it's played with real imagery.
 
 ### Resolved
 
@@ -710,7 +694,9 @@ miserable.
 - [x] ~~Zone authoring~~ — **`/admin` editor that exports JSON to commit**, §7
 - [x] ~~Host disconnects~~ — **room is dropped after a ~30s grace period; no host
   promotion**, §4
-- [x] ~~Distance curve~~ — **log distance, not GeoGuessr's exponential**, §6
+- [x] ~~Distance curve~~ — **GeoGuessr's exponential**, §6
+- [x] ~~Speed bonus~~ — **none; accuracy is the whole score**, §6
+- [x] ~~Abandoning a game~~ — **host-only cancel, back to the lobby**, §4
 - [x] ~~Podium ties~~ — **standard competition ranking, empty steps render empty**, §4
 - [x] ~~Committing a guess~~ — **pin then Confirm; unconfirmed pin auto-submits at
   time-up**, §5
@@ -748,10 +734,9 @@ architecture would need revisiting if it turns out to be wrong.
 - Distance is great-circle (haversine), not driving distance.
 - Everyone has a modern mobile browser with WebSocket and WebGL support. Portrait
   orientation is the design target.
-- **Players won't forge their own stopwatch.** §5 trades a small cheat surface for
-  fairness on slow connections. A player editing `elapsedMs` to 0 gains at most a 40%
-  multiplier on accuracy they still had to earn. Accepted for a party game among people
-  in the same room; it would not be acceptable for anything ranked or public.
+- **A client-measured clock is trustworthy enough**, because nothing depends on it: it is
+  displayed, not scored (§6). The only thing worth forging would be the answer itself, and
+  that never leaves the server before the reveal.
 - No authentication. Anyone with the room code can join — including someone who guesses
   a code. At 4 characters and a handful of live rooms that's a non-issue, and the stakes
   are a party game.

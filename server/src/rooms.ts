@@ -54,7 +54,7 @@ export type Player = {
 
 export type Guess = {
   at: LatLng;
-  /** Already clamped to 0–ROUND_MS: the clamp lives at the edge, not at scoring time (§5). */
+  /** Clamped to 0–ROUND_MS. Shown on the reveal; it does not affect the score. */
   elapsedMs: number;
 };
 
@@ -348,6 +348,36 @@ export class RoomStore {
     return fail('WRONG_PHASE', 'Nothing to advance from right now.');
   }
 
+  /**
+   * Host only. Abandons the game and returns everyone to the lobby — the escape hatch for a
+   * game started by mistake, with the wrong people, or that nobody wants to finish.
+   *
+   * Scores are cleared and the room unlocks, so anyone held out by the lock (§4) can join
+   * for the next one.
+   */
+  cancelGame(conn: Conn, now = Date.now()): Result {
+    const located = this.locate(conn);
+    if (!located) return fail('BAD_MESSAGE', 'You are not in a room.');
+    const { room, player } = located;
+    if (!player.isHost) return fail('NOT_HOST', 'Only the host can cancel the game.');
+    if (room.phase === 'LOBBY') return fail('WRONG_PHASE', 'There is no game to cancel.');
+
+    // Leaving this armed would fire into an idle lobby and try to end a round that no
+    // longer exists.
+    if (room.round) this.scheduler.cancel(room.round.backstop);
+
+    room.phase = 'LOBBY';
+    room.roundIndex = 0;
+    room.deck = [];
+    room.round = null;
+    room.lastMessage = null;
+    for (const p of room.players.values()) p.score = 0;
+
+    this.touch(room, now);
+    this.broadcastState(room, now);
+    return { ok: true, room, player };
+  }
+
   private beginRound(room: Room, index: number, now: number): void {
     const location = room.deck[index];
     if (!location) throw new Error(`No location dealt for round ${index}`);
@@ -425,7 +455,7 @@ export class RoomStore {
         };
       }
       const distanceKm = haversineKm(guess.at, actual);
-      const points = scoreGuess(distanceKm, guess.elapsedMs);
+      const points = scoreGuess(distanceKm);
       player.score += points;
       return {
         playerId: player.id,

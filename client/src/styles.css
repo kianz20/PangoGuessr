@@ -395,6 +395,43 @@ body {
   font-size: 1.6rem;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
+  /* Pushed right so the cancel button sits in the middle, away from both. */
+  margin-left: auto;
+}
+
+/* Understated until armed: it's an escape hatch, not a primary action. */
+.cancel-game {
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.cancel-game--compact {
+  padding: 4px 10px;
+  font-size: 0.72rem;
+}
+
+.cancel-game--armed {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+.results__buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.results__buttons .button {
+  flex: 1;
 }
 
 .round__clock--urgent {
@@ -571,6 +608,11 @@ body {
 .yours__distance {
   flex: 1;
   color: var(--muted);
+}
+
+.yours__time {
+  opacity: 0.7;
+  font-size: 0.85em;
 }
 
 .yours__points {

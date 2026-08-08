@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { LatLng } from '@pangoguessr/shared';
+import { CancelGame } from '../components/CancelGame';
 import { GuessMap } from '../components/GuessMap';
 import { PanoramaView } from '../components/PanoramaView';
 import type { RoundView } from '../useRoom';
@@ -10,11 +11,15 @@ const DOCKED_MAP = '(min-width: 1024px)';
 export function Round({
   round,
   totalRounds,
+  isHost,
   onGuess,
+  onCancelGame,
 }: {
   round: RoundView;
   totalRounds: number;
+  isHost: boolean;
   onGuess: (at: LatLng, elapsedMs: number) => void;
+  onCancelGame: () => void;
 }) {
   const [pin, setPin] = useState<LatLng | null>(null);
   // On a phone the map is an overlay you open; on a desktop there's room for it to sit
@@ -95,6 +100,9 @@ export function Round({
         <span className="round__count">
           Round {round.index + 1}/{totalRounds}
         </span>
+        {/* In the header, deliberately away from the Confirm button the host is aiming for
+            under time pressure. */}
+        {isHost && <CancelGame onCancel={onCancelGame} compact />}
         <span className={`round__clock${seconds <= 10 ? ' round__clock--urgent' : ''}`}>
           {seconds}s
         </span>

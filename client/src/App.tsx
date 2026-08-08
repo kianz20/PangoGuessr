@@ -21,6 +21,7 @@ export default function App() {
     kick,
     startRound,
     advance,
+    cancelGame,
     submitGuess,
   } = useRoom();
 
@@ -36,7 +37,13 @@ export default function App() {
     switch (room.phase) {
       case 'ROUND_ACTIVE':
         return round ? (
-          <Round round={round} totalRounds={room.totalRounds} onGuess={submitGuess} />
+          <Round
+            round={round}
+            totalRounds={room.totalRounds}
+            isHost={isHost}
+            onGuess={submitGuess}
+            onCancelGame={cancelGame}
+          />
         ) : (
           <Waiting title="Loading the round" />
         );
@@ -50,6 +57,7 @@ export default function App() {
             totalRounds={room.totalRounds}
             rankDeltas={rankDeltas}
             onAdvance={advance}
+            onCancelGame={cancelGame}
           />
         ) : (
           <Waiting title="Scoring the round" />

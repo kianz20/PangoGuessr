@@ -1,35 +1,18 @@
-import { ROUND_MS } from './constants';
+/** Distance at which the curve has decayed to essentially nothing. */
+const WORLD_KM = 14_916;
 
-/** Accuracy floors at zero here — roughly antipodal (§6). */
-const MAX_KM = 20_000;
-/** Below this, treat as a bullseye. Lower rewards precision more. */
-const NEAR_KM = 0.5;
-
-const DECAY_DIVISOR = Math.log10(1 + MAX_KM / NEAR_KM);
-
-/** How much of its accuracy a guess at the buzzer keeps: 1 - SPEED_WEIGHT. */
-const SPEED_WEIGHT = 0.4;
+const MAX_POINTS = 5000;
 
 /**
- * Log distance, not GeoGuessr's exponential (§6). Every halving of the error is worth the
- * same, so finding the street beats finding the city instead of tying with it.
- */
-export function accuracyScore(distanceKm: number): number {
-  const d = Math.max(distanceKm, 0);
-  const decay = Math.log10(1 + d / NEAR_KM) / DECAY_DIVISOR;
-  return 5000 * Math.max(0, 1 - decay);
-}
-
-/**
- * Server-only in anger — the client lacks the actual coordinates to pass in, and may
- * import this to *preview* a score but never to decide one (§6).
+ * GeoGuessr's world scoring curve. A perfect guess scores 5000 and the score decays
+ * exponentially with distance, so being on the right continent is worth real points and
+ * being on the wrong side of the planet is worth none.
  *
- * `elapsedMs` is client-reported (§5) and clamped here, so the clamp can't be bypassed
- * by any caller.
+ * Runs on the server only: the client has no access to the actual coordinates.
  */
-export function scoreGuess(distanceKm: number, elapsedMs: number): number {
-  const t = Math.min(Math.max(elapsedMs, 0) / ROUND_MS, 1);
-  return Math.round(accuracyScore(distanceKm) * (1 - SPEED_WEIGHT * t));
+export function scoreGuess(distanceKm: number): number {
+  const d = Math.max(distanceKm, 0);
+  return Math.round(MAX_POINTS * Math.exp((-10 * d) / WORLD_KM));
 }
 
 const EARTH_RADIUS_KM = 6371;

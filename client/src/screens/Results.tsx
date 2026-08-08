@@ -1,3 +1,4 @@
+import { CancelGame } from '../components/CancelGame';
 import { RevealMap } from '../components/RevealMap';
 import type { ResultsView } from '../useRoom';
 
@@ -33,6 +34,7 @@ export function Results({
   totalRounds,
   rankDeltas,
   onAdvance,
+  onCancelGame,
 }: {
   results: ResultsView;
   youId: string;
@@ -40,6 +42,7 @@ export function Results({
   totalRounds: number;
   rankDeltas: Record<string, number>;
   onAdvance: () => void;
+  onCancelGame: () => void;
 }) {
   const you = results.results.find((r) => r.playerId === youId);
   const yourRank = results.leaderboard.find((r) => r.playerId === youId);
@@ -61,6 +64,9 @@ export function Results({
           <span className="yours__label">You</span>
           <span className="yours__distance">
             {you.distanceKm === null ? 'No guess' : formatDistance(you.distanceKm)}
+            {you.elapsedMs !== null && (
+              <span className="yours__time"> in {Math.round(you.elapsedMs / 1000)}s</span>
+            )}
           </span>
           <span className="yours__points">+{you.points}</span>
           {yourRank && (
@@ -112,10 +118,13 @@ export function Results({
           scroll to find it. */}
       <footer className="results__actions results__actions--sticky">
         {isHost ? (
-          // Only the host's client renders this, and the server re-checks isHost anyway (§4).
-          <button className="button button--primary" type="button" onClick={onAdvance}>
-            {results.isFinalRound ? 'See the podium' : 'Next round'}
-          </button>
+          // Only the host's client renders these, and the server re-checks isHost anyway (§4).
+          <div className="results__buttons">
+            <button className="button button--primary" type="button" onClick={onAdvance}>
+              {results.isFinalRound ? 'See the podium' : 'Next round'}
+            </button>
+            <CancelGame onCancel={onCancelGame} />
+          </div>
         ) : (
           <p className="hint">
             Waiting for the host to
