@@ -16,6 +16,18 @@ export function getSessionId(): string {
 }
 
 /**
+ * A hub (e.g. PangoGaming) handing off a voted-in lobby lands here with a `pid` query
+ * param — the id it already told this player about — so this browser's identity in the
+ * room it's about to join matches what the hub pre-announced, and `join`'s sessionId
+ * matching in rooms.ts treats it as a normal join rather than a stranger showing up.
+ * Called once at boot, before anything reads getSessionId().
+ */
+export function adoptHandoffSession(): void {
+  const pid = new URLSearchParams(location.search).get('pid');
+  if (pid) localStorage.setItem(SESSION_KEY, pid);
+}
+
+/**
  * NOT `crypto.randomUUID()`. That's restricted to secure contexts, so it exists on
  * localhost and on Render's HTTPS, but is `undefined` when testing from a phone against
  * `http://<lan-ip>:5173` — which is exactly how this gets tested. `getRandomValues` has no

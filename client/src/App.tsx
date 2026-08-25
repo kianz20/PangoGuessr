@@ -1,3 +1,5 @@
+import { useEffect, useRef } from 'react';
+import { normalizeCode } from '@pangoguessr/shared';
 import { Admin } from './admin/Admin';
 import { GameOver } from './screens/GameOver';
 import { Home } from './screens/Home';
@@ -33,6 +35,36 @@ function Game() {
     cancelGame,
     submitGuess,
   } = useRoom();
+
+  // A hub (e.g. PangoGaming) handing off a voted-in lobby lands here with ?autohost=1&n=Host
+  // and ?c=<code>&n=<name> for players — see the effects below.
+  const params = new URLSearchParams(location.search);
+  const notifiedRef = useRef(false);
+
+  useEffect(() => {
+    if (status !== 'home') return;
+    if (params.get('autohost') === '1') {
+      createRoom(params.get('n')?.trim() || 'Host');
+      return;
+    }
+    const code = normalizeCode(params.get('c') ?? '');
+    const name = params.get('n')?.trim();
+    if (code && name && params.get('pid')) joinRoom(code, name);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
+
+  // Once our room exists, tell the hub what code it got so it can redirect the other players.
+  useEffect(() => {
+    const notify = params.get('notify');
+    if (!notify || notifiedRef.current || !room || !me?.isHost) return;
+    notifiedRef.current = true;
+    fetch(notify, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: room.code }),
+    }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [room, me]);
 
   if (status !== 'home' && status !== 'inRoom') {
     return <Connecting status={status} notice={notice} onCancel={leaveRoom} />;
