@@ -13,6 +13,19 @@ export type PublicPlayer = {
   isHost: boolean;
   connected: boolean;
   score: number;
+  /**
+   * A palette slot, unique in the room for as long as they're in it, so a player is the same
+   * colour on every screen and every phone. Handed out by the server because hashing IDs
+   * into a palette collides constantly at 20 players.
+   */
+  color: number;
+};
+
+/** How many have guessed — a count, never who or how well, so nothing is spoiled (§8). */
+export type GuessProgress = {
+  guessed: number;
+  /** Everyone the round is still waiting on, plus those who've already guessed. */
+  total: number;
 };
 
 /**
@@ -26,6 +39,7 @@ export type RoundSnapshot = {
   /** Left on the room's backstop clock, not the player's own 40s. */
   remainingMs: number;
   youGuessed: boolean;
+  progress: GuessProgress;
 };
 
 export type RoomStateMsg = {
@@ -37,6 +51,12 @@ export type RoomStateMsg = {
   totalRounds: number;
   /** Which of `players` is the recipient, so the client needn't guess. */
   youId: string;
+  /**
+   * The game's panoramas in round order, dealt when the room is created so every phone can
+   * load them before their round comes up (§7). IDs only — never coordinates or place names,
+   * which stay server-side until each `roundEnd` (§3). Empty until the deck is dealt.
+   */
+  panoIds: string[];
   round?: RoundSnapshot;
 };
 
@@ -73,22 +93,58 @@ export type ErrorCode =
   | 'LOCATIONS_NOT_READY'
   | 'BAD_MESSAGE';
 
+/**
+ * What a reconnecting client knows about its own drop, sent with the `join` that restores it.
+ * Logged by the server, so "people keep getting disconnected" can be answered from the logs:
+ * which phones, how long, and what noticed.
+ */
+export type ReconnectDiag = {
+  /**
+   * What noticed the drop: the browser closing the socket, the client's own heartbeat giving
+   * up on a silent one, the phone going offline, or the page itself reloading.
+   */
+  cause: 'closed' | 'stale' | 'offline' | 'reload';
+  /** How long it was without a working socket. Null for a reload, which can't know. */
+  downMs: number | null;
+  /** Connection attempts it took, including the one that worked. */
+  attempts: number;
+  /** The dropped socket's close code — 1006 is "gone without a goodbye". 0 if none. */
+  closeCode: number;
+  /** Whether the page was hidden when it dropped: screen locked, app switched. */
+  hidden: boolean;
+};
+
 export type ClientMessage =
   | { type: 'create'; displayName: string; sessionId: string }
-  | { type: 'join'; code: string; displayName: string; sessionId: string }
+  | { type: 'join'; code: string; displayName: string; sessionId: string; diag?: ReconnectDiag }
   | { type: 'leave' }
   | { type: 'kick'; playerId: string } // host only
   | { type: 'startRound' } // host only
   | { type: 'advance' } // host only
   | { type: 'cancelGame' } // host only — abandon mid-game, back to the lobby
-  | { type: 'submitGuess'; lat: number; lng: number; elapsedMs: number };
+  /**
+   * `roundIndex` is what makes a resend safe: a guess retried after a reconnect must never be
+   * scored against the round after the one it was made in.
+   */
+  | { type: 'submitGuess'; roundIndex: number; lat: number; lng: number; elapsedMs: number }
+  /**
+   * App-level heartbeat. Browsers never expose the protocol's ping frames to JavaScript, so
+   * this is the only way a phone can find out its socket has silently died.
+   */
+  | { type: 'ping' };
 
 export type ServerMessage =
   | RoomStateMsg
   /** Never carries the answer — only the panorama to render (§3). */
   | { type: 'roundStart'; roundIndex: number; panoId: string; durationMs: number }
-  /** Deliberately no score: leaking one mid-round would spoil it (§8). */
-  | { type: 'guessAck'; received: true }
+  /**
+   * Deliberately no score: leaking one mid-round would spoil it (§8). Sent again for a
+   * duplicate, so a client resending after a reconnect always hears back.
+   */
+  | { type: 'guessAck'; received: true; roundIndex: number }
+  /** Sent to the whole room on each new guess: one small count, not a score (§8). */
+  | { type: 'guessProgress'; roundIndex: number; progress: GuessProgress }
+  | { type: 'pong' }
   | {
       type: 'roundEnd';
       roundIndex: number;

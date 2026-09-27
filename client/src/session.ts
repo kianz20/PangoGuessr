@@ -1,3 +1,5 @@
+import { normalizeCode } from '@pangoguessr/shared';
+
 const SESSION_KEY = 'pangoguessr.sessionId';
 const LAST_ROOM_KEY = 'pangoguessr.lastRoom';
 
@@ -16,15 +18,52 @@ export function getSessionId(): string {
 }
 
 /**
- * A hub (e.g. PangoGaming) handing off a voted-in lobby lands here with a `pid` query
- * param — the id it already told this player about — so this browser's identity in the
- * room it's about to join matches what the hub pre-announced, and `join`'s sessionId
- * matching in rooms.ts treats it as a normal join rather than a stranger showing up.
- * Called once at boot, before anything reads getSessionId().
+ * A hub (e.g. PangoGaming) handing off a voted-in lobby: the host lands with
+ * `?autohost=1&n=<name>&notify=<url>`, players with `?c=<code>&n=<name>&pid=<id>`.
  */
-export function adoptHandoffSession(): void {
-  const pid = new URLSearchParams(location.search).get('pid');
+export type Handoff =
+  | { kind: 'create'; name: string; notify: string | null }
+  | { kind: 'join'; code: string; name: string };
+
+/** Read once per page load; see readHandoff. */
+let handoff: Handoff | null | undefined;
+
+/**
+ * The hub hand-off in this page's URL, if any — read the first time this is called, and the
+ * same answer every time after. Called at boot, before anything reads getSessionId().
+ *
+ * Adopts `pid` as this browser's identity, so the room it's about to join matches what the
+ * hub pre-announced, and `join`'s sessionId matching in rooms.ts treats it as a normal join
+ * rather than a stranger showing up.
+ *
+ * Then strips the hand-off from the address bar. Left there, it acted on every reload and
+ * every return to the home screen: a host whose tab reloaded mid-game created a second room
+ * and abandoned the first, a kicked player walked straight back in, and a player whose room
+ * had closed re-joined it in a loop. A reload now rejoins through recallRoom like any other.
+ * `c` stays, as it's also the ordinary QR join link and only pre-fills the code.
+ */
+export function readHandoff(): Handoff | null {
+  if (handoff !== undefined) return handoff;
+
+  const params = new URLSearchParams(location.search);
+  const name = params.get('n')?.trim();
+  const code = normalizeCode(params.get('c') ?? '');
+  const pid = params.get('pid');
   if (pid) localStorage.setItem(SESSION_KEY, pid);
+
+  handoff =
+    params.get('autohost') === '1'
+      ? { kind: 'create', name: name || 'Host', notify: params.get('notify') }
+      : code && name && pid
+        ? { kind: 'join', code, name }
+        : null;
+
+  if (handoff) {
+    for (const key of ['autohost', 'n', 'pid', 'notify']) params.delete(key);
+    const query = params.toString();
+    history.replaceState(history.state, '', `${location.pathname}${query ? `?${query}` : ''}`);
+  }
+  return handoff;
 }
 
 /**

@@ -194,6 +194,27 @@ test('the pool refuses to deal until it holds a full game', async () => {
   }
 });
 
+test('deal waits for the pool to fill instead of refusing', async () => {
+  let n = 0;
+  const fetcher: MetadataFetcher = async (point) => ({ panoId: `PANO_${n++}`, at: point });
+  const pool = new PooledLocationSource(fetcher, stats(), () => ZONE_GROUPS, 8);
+
+  // Two rooms created on a cold pool at once: both get a full, distinct game.
+  const [a, b] = await Promise.all([pool.deal(ROUNDS_PER_GAME), pool.deal(ROUNDS_PER_GAME)]);
+  assert.equal(a?.length, ROUNDS_PER_GAME);
+  assert.equal(b?.length, ROUNDS_PER_GAME);
+  const ids = [...a!, ...b!].map((l) => l.panoId);
+  assert.equal(new Set(ids).size, ids.length, 'no panorama dealt to two rooms');
+});
+
+test('deal gives up on a failing fetcher rather than waiting out the backoff', async () => {
+  const broken: MetadataFetcher = async () => {
+    throw new Error('boom');
+  };
+  const pool = new PooledLocationSource(broken, stats(), () => ZONE_GROUPS, 5);
+  assert.equal(await pool.deal(5), null);
+});
+
 test('a failing fetcher backs off instead of hammering the API', async () => {
   const s = stats();
   let calls = 0;

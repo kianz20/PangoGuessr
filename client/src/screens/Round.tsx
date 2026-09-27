@@ -13,12 +13,15 @@ export function Round({
   totalRounds,
   isHost,
   onGuess,
+  onClockStart,
   onCancelGame,
 }: {
   round: RoundView;
   totalRounds: number;
   isHost: boolean;
-  onGuess: (at: LatLng, elapsedMs: number) => void;
+  onGuess: (roundIndex: number, at: LatLng, elapsedMs: number) => void;
+  /** The panorama is visible — this is what the 40s is measured from (§5). */
+  onClockStart: (roundIndex: number) => void;
   onCancelGame: () => void;
 }) {
   const [pin, setPin] = useState<LatLng | null>(null);
@@ -29,23 +32,24 @@ export function Round({
   );
   const [remainingMs, setRemainingMs] = useState(round.durationMs);
 
-  /** Set when the panorama is actually visible — this is what the 40s is measured from (§5). */
-  const startedAtRef = useRef<number | null>(null);
+  /**
+   * The latest round, for the clock's interval. Its start and the room's deadline live in
+   * useRoom, so a reconnect can correct the deadline and nothing can restart their 40s.
+   */
+  const roundRef = useRef(round);
+  roundRef.current = round;
   const pinRef = useRef<LatLng | null>(null);
   pinRef.current = pin;
   const submittedRef = useRef(false);
   const onGuessRef = useRef(onGuess);
   onGuessRef.current = onGuess;
-
-  // The room's 46s clock, which bounds the player's own 40s. A player whose panorama loaded
-  // slowly gets their personal clock clipped by this — accepted, and not reconciled in the
-  // UI (§5).
-  const roomDeadlineRef = useRef(Date.now() + round.remainingMs);
+  const onClockStartRef = useRef(onClockStart);
+  onClockStartRef.current = onClockStart;
 
   const submit = useCallback((at: LatLng, elapsedMs: number) => {
     if (submittedRef.current) return;
     submittedRef.current = true;
-    onGuessRef.current(at, elapsedMs);
+    onGuessRef.current(roundRef.current.index, at, elapsedMs);
   }, []);
 
   // A fresh round: reset everything keyed on the round, not on renders.
@@ -53,37 +57,38 @@ export function Round({
     setPin(null);
     setMapOpen(window.matchMedia(DOCKED_MAP).matches);
     setRemainingMs(round.durationMs);
-    startedAtRef.current = null;
     submittedRef.current = round.youGuessed;
-    roomDeadlineRef.current = Date.now() + round.remainingMs;
   }, [round.index]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handlePanoReady = useCallback(() => {
-    startedAtRef.current = Date.now();
+    onClockStartRef.current(roundRef.current.index);
   }, []);
 
   useEffect(() => {
     const tick = window.setInterval(() => {
       const now = Date.now();
-      const startedAt = startedAtRef.current;
+      const { startedAt, durationMs, roomDeadline } = roundRef.current;
       // Before the panorama renders, show a full clock: their time hasn't started yet.
-      const ownRemaining = startedAt === null ? round.durationMs : startedAt + round.durationMs - now;
-      const left = Math.max(0, Math.min(ownRemaining, roomDeadlineRef.current - now));
+      const ownRemaining = startedAt === null ? durationMs : startedAt + durationMs - now;
+      // The room's 46s clock bounds the player's own 40s. A player whose panorama loaded
+      // slowly gets their personal clock clipped by this — accepted, and not reconciled in
+      // the UI (§5).
+      const left = Math.max(0, Math.min(ownRemaining, roomDeadline - now));
       setRemainingMs(left);
 
       if (left === 0 && !submittedRef.current) {
         // Time up with a pin placed but unconfirmed: submit it anyway rather than losing
         // the round to a missed button press (§5). No pin at all scores 0.
         const at = pinRef.current;
-        if (at) submit(at, round.durationMs);
+        if (at) submit(at, durationMs);
       }
     }, 200);
     return () => window.clearInterval(tick);
-  }, [round.index, round.durationMs, submit]);
+  }, [round.index, submit]);
 
   const confirm = () => {
     const at = pin;
-    const startedAt = startedAtRef.current;
+    const startedAt = round.startedAt;
     if (!at || startedAt === null) return;
     submit(at, Date.now() - startedAt);
   };

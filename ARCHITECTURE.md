@@ -63,25 +63,27 @@ Client → Server:
 
 ```
 create          { displayName, sessionId }           // mints a room, caller becomes host
-join            { code, displayName, sessionId }
+join            { code, displayName, sessionId, diag? }  // diag: why a rejoin was needed (§3)
 leave           { }
 kick            { playerId }                         // host only
 startRound      { }                                  // host only
-submitGuess     { lat, lng, elapsedMs }              // client-measured, server-clamped
+submitGuess     { roundIndex, lat, lng, elapsedMs }  // client-measured, server-clamped
 advance         { }                                  // host only — leaves round results
 cancelGame      { }                                  // host only — abandon, back to lobby
+ping            { }                                  // app-level heartbeat
 ```
 
 Server → Client:
 
 ```
-roomState       { code, players[], phase, roundIndex, totalRounds }
+roomState       { code, players[], phase, roundIndex, totalRounds, panoIds[] }
 roundStart      { roundIndex, panoId, durationMs: 40000 }
-guessAck        { received: true }                   // no score leaked yet
+guessAck        { received: true, roundIndex }       // no score leaked yet; resent for duplicates
 roundEnd        { actual: {lat,lng}, results[], leaderboard[], isFinalRound }
 gameEnd         { leaderboard[] }
 roomClosed      { reason }                           // host left, or room reaped (§8)
 error           { code, message }
+pong            { }
 ```
 
 Room creation is a WS frame, not an HTTP endpoint, so there is **one transport and one code
@@ -90,6 +92,41 @@ path** — and `create` and `join` end in the same place, a `roomState` broadcas
 `roundStart` never includes the answer coordinates — only the panorama ID. Anything
 sent to the client is visible in devtools, so the answer stays server-side until
 `roundEnd`.
+
+`roomState.panoIds` is the whole game's panoramas in round order, sent from the lobby
+onwards so every phone can preload them (§7). Same rule: IDs only. That's the same exposure
+`roundStart` has always had — a viewer built from an ID can report where it is — just
+available earlier, which is accepted for a party game.
+
+### Keeping the socket alive on a phone
+
+Phones drop sockets constantly — screen locks, app switches, WiFi-to-4G handoffs — and most
+drops are over in a second. The job is to make them cost about that much. The client side
+lives in `client/src/connection.ts`, which knows nothing about the game.
+
+- **Both ends run a heartbeat.** The server pings every 4s and drops a socket it hasn't heard
+  from in 10s (10–14s in practice, down from 15–30s): until then the room is still waiting on
+  that phone. Browsers never expose protocol pings to JavaScript, so the client also sends an
+  app-level `ping` every 4s and gives up on a socket that doesn't answer within 6s. Without
+  that, a socket that died silently — a tunnel, a dead WiFi — looks open until the OS gives
+  up on it, which can take minutes, and the game just freezes.
+- **Reconnecting starts immediately**, then backs off with jitter (0.5s, 1s, 2s, then 4s). Once
+  in a room, an attempt stuck connecting is abandoned after 5s, since the server is known to be
+  awake. Coming back to the page, getting the network back, or the network changing checks the
+  socket at once instead of waiting for the next beat. "Waking the server up" is only ever
+  shown on a first connect.
+- **The game stays on screen through a drop.** A banner says it's reconnecting, but the round
+  — panorama, pin, clock — is untouched, and a drop under a second shows nothing at all. It
+  used to be replaced by a full-screen "Reconnecting", which unmounted the round and lost the
+  pin.
+- **A guess is kept until it's acknowledged**, and resent after a reconnect. `roundIndex` is
+  what makes that safe: the server drops a guess for any round but the live one, so a late
+  resend can never be scored against the next round. It acknowledges duplicates too, so a
+  resend always hears back.
+- **Every rejoin says why it was needed** (`join.diag`: what noticed the drop, how long it
+  lasted, how many attempts, the close code, whether the page was hidden or had reloaded). The
+  server logs one line per drop and per recovery, and `/api/health` counts them under
+  `connections`, so "people keep getting disconnected" is answered from the logs.
 
 ---
 
@@ -209,7 +246,7 @@ So timing is **client-measured**:
 
 - The client starts a local stopwatch on the Street View viewer's `pano_changed` /
   first-tile-rendered event — not on message receipt.
-- `submitGuess` carries `{ lat, lng, elapsedMs }`.
+- `submitGuess` carries `{ roundIndex, lat, lng, elapsedMs }`.
 - The server **clamps `elapsedMs` to 0–40000** and records it alongside the guess.
 
 ### Placing a guess
@@ -263,6 +300,13 @@ no guess**. Getting this predicate wrong is the likeliest cause of a round that 
 refuses to end, so it's worth a unit test: disconnect one of three players mid-round and
 assert the round closes when the remaining two have guessed.
 
+A dropped player stays active for a **~5s grace** first (`RECONNECT_GRACE_MS`). Without it,
+a screen lock by the last player still to guess ended the round the instant their socket
+closed, and they came back a second later to results and 0 points. The server re-checks
+when the grace runs out, so the room waits 5s at most, not the 46s backstop. A socket the
+heartbeat gave up on gets no grace — it has already been silent for 10s. The grace also
+means a venue WiFi hiccup that drops every phone at once no longer ends the round.
+
 ### Edge cases this must handle
 
 - **Late guess.** Accept guesses until the room timer fires; clamp `elapsedMs` to 40000.
@@ -271,10 +315,12 @@ assert the round closes when the remaining two have guessed.
 - **Missing or absurd `elapsedMs`.** Treat as 40000 (worst case, still scored on
   accuracy) rather than rejecting the guess.
 - **No guess.** Score 0 for the round. Do not stall the room.
-- **Player disconnects mid-round.** Drop them from the "active" set so the early-end
-  check can still be satisfied by everyone else.
-- **Last active player disconnects before guessing.** End the round rather than waiting
-  out the backstop on an empty room.
+- **Player disconnects mid-round.** Drop them from the "active" set once their grace runs
+  out, so the early-end check can still be satisfied by everyone else.
+- **Last active player disconnects before guessing.** End the round when their grace runs
+  out, rather than waiting out the backstop on an empty room.
+- **Guess made while disconnected.** The client keeps it and resends it after the reconnect;
+  `roundIndex` stops a late resend landing in the next round.
 - **Duplicate `submitGuess`.** Ignore all but the first — a double-tap must not corrupt
   the guessed-count that the early-end check depends on.
 - **Host disconnects.** After a ~30s grace period the room is dropped and everyone gets
@@ -370,18 +416,21 @@ but the quota is what actually saves you.
 
 **3. App-level discipline**, which is what stops it happening at all:
 
-- **Mount the panorama exactly once per round.** Create the `StreetViewPanorama` in an
-  effect keyed on `roundIndex` alone. If it's keyed on anything that changes during the
-  round — timer state, player list, room state — every tick re-initialises the viewer and
-  bills again.
-- **React StrictMode double-mounts effects in development.** This silently doubles every
-  panorama load while you're building. Either use a mount guard (ref) or disable
-  StrictMode while working on the viewer. Easy to burn hundreds of loads on this without
-  noticing.
+- **One viewer per panorama per page load.** Every `StreetViewPanorama` is built in one
+  place (`client/src/panoramas.ts`) and keyed by `panoId`. Components never build their
+  own; the round screen borrows the viewer and, on unmount, parks it rather than destroying
+  it.
+- **Show it in an effect keyed on `roundIndex` alone.** If it's keyed on anything that
+  changes during the round — timer state, player list, room state — every tick re-attaches
+  the viewer.
+- **React StrictMode double-mounts effects in development.** Parking instead of destroying
+  is what makes this harmless: the second mount gets the same viewer back.
 - **Reconnecting to the same `panoId` must reuse the existing viewer**, not build a new
-  one. Reconnects are the expected case on phones, not an edge case.
-- **Never render the panorama outside `ROUND_ACTIVE`.** Unmount it on `ROUND_RESULTS` so
-  a stuck results screen isn't holding a live viewer.
+  one. Reconnects are the expected case on phones, not an edge case. A dropped socket no
+  longer unmounts the round screen at all (§3); anything that does remount it — taking the
+  game back from another tab — gets the parked viewer straight back.
+- **Only the live round's viewer is on screen.** Upcoming ones wait hidden and inert,
+  and a viewer is destroyed as soon as its round's results come in.
 
 **Instrument it.** Have the server log a counter of rounds started per room and expose a
 running monthly total at `/api/health`. Loads should track at roughly
@@ -523,8 +572,46 @@ Metadata retries take real time — a handful of round-trips before a hit is nor
 that at `startRound` means players stare at a blank screen.
 
 So the server keeps a **pool of ~20 pre-validated `panoId`s**, refilled in the background
-between rounds. `startRound` pops from the pool and broadcasts immediately. Metadata calls
-are free, so over-fetching costs nothing but time the server has spare.
+between rounds. Metadata calls are free, so over-fetching costs nothing but time the server
+has spare.
+
+### Deal in the lobby, preload on every phone
+
+Validating the locations early isn't enough on its own. With 16–20 phones all fetching
+panorama tiles over the same WiFi at the moment a round starts, **loading the imagery**
+mid-game was the slow part.
+
+So the game's five locations are **dealt when the room is created**, not at Start, and again
+whenever the room returns to the lobby (Play again, or a cancelled game — which gets a fresh
+deck, since its panoramas have already been sent to every phone). The deck's panorama IDs
+travel in `roomState.panoIds` (§3), so a player who joins, reloads or reconnects gets them
+without anyone asking.
+
+Each phone then builds the viewers **in the background, one at a time, in round order**:
+the next round gets the whole connection rather than sharing it with every round after it.
+They wait in a full-viewport parking container, at `opacity: 0` and inert, sized like the
+real stage so the tiles that load are the ones that will be shown. When a round starts, its
+viewer is moved on screen already loaded and the player's clock (§5) starts immediately.
+
+- On a cold server the pool is empty when the first room is created. The deal waits for the
+  refill and broadcasts the deck when it lands. If sampling fails, Start falls back to
+  dealing on the spot and says "try again in a moment", as before.
+- If the host presses Start before the phones have finished, nothing breaks: a round whose
+  viewer isn't built yet gets one straight away, and the queue skips it.
+- There's no event that says a panorama's tiles have arrived, so the queue gives each one a
+  couple of seconds after the viewer accepts the ID before starting the next. That timing
+  only affects how the downloads overlap, not whether the game works.
+
+**Cost.** Preloading doesn't cost extra in normal play: it's the same one load per player
+per round, spent earlier. It costs more in three cases:
+
+- **A cancelled game** has already loaded its unplayed rounds on every phone.
+- **A player who leaves the lobby** before Start has loaded the game they didn't play.
+- **A page reload mid-game** loads every remaining round again, not just the current one.
+
+A dropped socket that *doesn't* reload the page now costs nothing, where it used to rebuild
+the viewer. Keep the §7 quota cap as the backstop; if these cases start to matter, preload
+only a round or two ahead instead of the whole game.
 
 ### One panorama for everyone
 
@@ -595,6 +682,20 @@ phone locks its screen, backgrounds Safari, or drops WiFi, reconnecting with the
 This is the single most common way phone-based party games break — an unidentified
 reconnect creates a ghost duplicate player and the original's points vanish. Build it
 into `join` from the very first version rather than retrofitting.
+
+**Two tabs share one `sessionId`**, because they share `localStorage` — scanning the QR twice
+is enough, since the camera app opens a new tab. The newest socket wins, and the server
+closes the older one with close code **4001** (`CLOSE_REPLACED`). That tab must not
+auto-reconnect: when it did, each tab's reconnect kicked the other one out, every few seconds,
+for as long as both stayed open. It shows "Playing in another tab" with a button to take the
+game back instead.
+
+**A hub hand-off is read once.** PangoGaming launches the game with `?autohost=1&n=…` for
+the host and `?c=…&n=…&pid=…` for players. These params are read at boot and then stripped
+from the address bar (`c` stays, since it's also the ordinary QR join link). Left in the
+URL, they acted again on every reload and every return to the home screen. A host whose tab
+reloaded created a second room and abandoned the first, a kicked player rejoined
+immediately, and a player whose room had closed rejoined it in a tight loop.
 
 ### Room codes
 

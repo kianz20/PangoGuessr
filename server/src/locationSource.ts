@@ -16,11 +16,12 @@ export interface LocationSource {
   /** Sync on purpose: the room's phase transitions stay synchronous and testable. */
   take(count: number): RoundLocation[] | null;
   /**
-   * "Someone is about to play." Called when a room is created, which is the earliest
-   * moment we know sampling is worth doing — and there's a lobby's worth of time before
-   * anyone presses Start.
+   * Waits for `count` locations instead of refusing. A room deals its deck this way as soon
+   * as it's created — the earliest moment we know sampling is worth doing, with a lobby's
+   * worth of time before anyone presses Start — so phones can preload the panoramas (§7).
+   * Resolves null if sampling is failing; the room then falls back to `take` at Start.
    */
-  prewarm?(): void;
+  deal?(count: number): Promise<RoundLocation[] | null>;
   stats(): Record<string, number | string>;
 }
 
@@ -107,9 +108,18 @@ export class PooledLocationSource implements LocationSource {
     return taken;
   }
 
-  /** Fire-and-forget top-up, triggered by a room being created. */
-  prewarm(): void {
-    void this.refill();
+  async deal(count: number): Promise<RoundLocation[] | null> {
+    // Bounded, because several rooms can be waiting on one refill: whoever resumes first
+    // takes a deck, and the rest find the pool short again and wait for the next one.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const taken = this.take(count);
+      if (taken) return taken;
+      await this.refill();
+      // A refill that failed is backing off. Waiting that out would leave the lobby with no
+      // deck and no word why; Start reports it instead.
+      if (this.pool.length < count && this.lastError) return null;
+    }
+    return null;
   }
 
   /** Awaitable version, for the checker script and tests. */
@@ -178,7 +188,7 @@ export function createLocationSource(
   const pool = new PooledLocationSource(googleMetadataFetcher(serverKey, stats), stats, zonesOf);
   // Deliberately NOT warmed at boot. The free tier wakes on any request — including health
   // checks and idle pings — and sampling on every wake burns daily quota for games nobody
-  // is playing. The pool fills when a room is created instead.
+  // is playing. The pool fills when a room is created and deals its first deck instead.
   console.log(`[locations] Street View sampling active, pool fills when a room is created`);
   return pool;
 }

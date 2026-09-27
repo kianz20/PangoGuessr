@@ -1,21 +1,24 @@
 import { useEffect, useRef, useState } from 'react';
 import { LOAD_HEADROOM_MS } from '@pangoguessr/shared';
-import { getConfig, loadStreetView } from '../maps';
+import { showPanorama } from '../panoramas';
 
 /**
- * The panorama, and the single most cost-sensitive component in the app (§7).
+ * The panorama for the live round. The viewer itself comes from `panoramas.ts`, which built it
+ * while the room was in the lobby — this component just puts it on screen, so a round starts
+ * with the imagery already there instead of loading it against the clock.
  *
- * Rules it must keep, because each player device loading a panorama bills as one load:
+ * Cost rules it must keep, because each viewer bills one load (§7):
  *
- *  - **Mounted exactly once per round.** The effect is keyed on `roundIndex` alone. Keying
- *    it on timer or room state would re-initialise the viewer on every tick and bill again.
+ *  - **Keyed on `roundIndex` alone.** Keying it on timer or room state would re-attach the
+ *    viewer on every tick.
+ *  - **Never builds a viewer of its own.** Unmounting parks the viewer rather than destroying
+ *    it, so StrictMode's double-mount and a reconnect mid-round reuse it instead of billing
+ *    again.
  *  - **Never rendered outside ROUND_ACTIVE** — App only routes here during a live round.
- *  - **StrictMode double-mounts effects in development**, silently doubling every load, so a
- *    ref guards against the second run.
  *
  * It also owns the timing contract: `onReady` fires when imagery is actually visible, which
- * is what starts the player's own 40 seconds (§5), with a headroom fallback so a broken
- * viewer can't mean an infinite stopwatch.
+ * is what starts the player's own 40 seconds (§5) — immediately, for a preloaded panorama —
+ * with a headroom fallback so a broken viewer can't mean an infinite stopwatch.
  */
 export function PanoramaView({
   panoId,
@@ -27,21 +30,16 @@ export function PanoramaView({
   onReady: () => void;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
-  const panoramaRef = useRef<google.maps.StreetViewPanorama | null>(null);
-  const firedRef = useRef(false);
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
 
   const [status, setStatus] = useState<'loading' | 'ready' | 'placeholder' | 'error'>('loading');
 
   useEffect(() => {
-    let cancelled = false;
-    firedRef.current = false;
-    setStatus('loading');
-
+    let fired = false;
     const ready = () => {
-      if (firedRef.current) return;
-      firedRef.current = true;
+      if (fired) return;
+      fired = true;
       onReadyRef.current();
     };
 
@@ -53,67 +51,17 @@ export function PanoramaView({
     if (panoId.startsWith('dev:')) {
       setStatus('placeholder');
       requestAnimationFrame(ready);
-      return () => {
-        cancelled = true;
-        window.clearTimeout(fallback);
-      };
+      return () => window.clearTimeout(fallback);
     }
 
-    void (async () => {
-      try {
-        const { mapsBrowserKey } = await getConfig();
-        if (!mapsBrowserKey) throw new Error('No browser key configured');
-        const { StreetViewPanorama, StreetViewStatus } = await loadStreetView(mapsBrowserKey);
-        if (cancelled || !hostRef.current) return;
-
-        const panorama = new StreetViewPanorama(hostRef.current, {
-          pano: panoId,
-          // Pannable, not movable (§7). Movement bills a new load per step — 20 players
-          // taking 10 steps each is ~220 loads for one round, against 100 for a whole game.
-          linksControl: false,
-          clickToGo: false,
-          disableDefaultUI: true,
-          motionTracking: false,
-          motionTrackingControl: false,
-          showRoadLabels: false, // road names would give the country away
-          zoomControl: true,
-        });
-        panoramaRef.current = panorama;
-
-        // 'pano_changed' fires once the viewer has accepted the ID; tiles follow. This is the
-        // closest signal to "the player can see something".
-        const listener = panorama.addListener('pano_changed', () => {
-          if (cancelled) return;
-          setStatus('ready');
-          ready();
-        });
-
-        // A wrong or retired panorama ID would otherwise sit as a grey box.
-        const statusListener = panorama.addListener('status_changed', () => {
-          if (panorama.getStatus() !== StreetViewStatus.OK) {
-            setStatus('error');
-            ready();
-          }
-        });
-
-        if (cancelled) {
-          listener.remove();
-          statusListener.remove();
-        }
-      } catch (err) {
-        if (cancelled) return;
-        console.error('Panorama failed to load', err);
-        setStatus('error');
-        ready();
-      }
-    })();
+    const release = showPanorama(panoId, hostRef.current!, (next) => {
+      setStatus(next);
+      if (next !== 'loading') ready();
+    });
 
     return () => {
-      cancelled = true;
       window.clearTimeout(fallback);
-      // Drop the viewer between rounds so a stuck screen isn't holding a live one (§7).
-      panoramaRef.current = null;
-      if (hostRef.current) hostRef.current.innerHTML = '';
+      release();
     };
     // Keyed on the round alone — deliberately not on panoId, status or any timer state.
   }, [roundIndex]); // eslint-disable-line react-hooks/exhaustive-deps

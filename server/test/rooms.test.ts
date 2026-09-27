@@ -1,17 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { EMPTY_ROOM_TTL_MS, HOST_GRACE_MS, rankByScore } from '@pangoguessr/shared';
+import { CLOSE_REPLACED, EMPTY_ROOM_TTL_MS, HOST_GRACE_MS, rankByScore } from '@pangoguessr/shared';
 import type { ServerMessage } from '@pangoguessr/shared';
 import { RoomStore, connectedCount, type Conn } from '../src/rooms';
 
 class FakeConn implements Conn {
   readonly sent: ServerMessage[] = [];
   closed = false;
+  closeCode: number | undefined;
   send(msg: ServerMessage): void {
     this.sent.push(msg);
   }
-  close(): void {
+  close(code?: number): void {
     this.closed = true;
+    this.closeCode = code;
   }
   lastOfType<T extends ServerMessage['type']>(type: T) {
     return [...this.sent].reverse().find((m) => m.type === type);
@@ -24,6 +26,38 @@ function roomWithHost(store: RoomStore, name = 'Host') {
   assert.ok(result.ok);
   return { conn, room: result.room, player: result.player };
 }
+
+test('each player holds their own colour, kept across a reconnect and freed when they leave', () => {
+  const store = new RoomStore();
+  const { room } = roomWithHost(store);
+  const a = new FakeConn();
+  const b = new FakeConn();
+  const joinedA = store.join(a, room.code, 'A', 'session-a');
+  const joinedB = store.join(b, room.code, 'B', 'session-b');
+  assert.ok(joinedA.ok && joinedB.ok);
+
+  const colors = () => [...room.players.values()].map((p) => p.color);
+  assert.deepEqual(colors(), [0, 1, 2], 'distinct, lowest first');
+
+  store.disconnect(a);
+  const back = store.join(new FakeConn(), room.code, 'A', 'session-a');
+  assert.ok(back.ok);
+  assert.equal(back.player.color, 1, 'a reconnect keeps the colour everyone knows them by');
+
+  store.leave(back.ok ? back.player.conn! : a);
+  const newcomer = store.join(new FakeConn(), room.code, 'C', 'session-c');
+  assert.ok(newcomer.ok);
+  assert.equal(newcomer.player.color, 1, 'a leaver’s colour goes back into use');
+
+  store.broadcastState(room);
+  const state = b.lastOfType('roomState');
+  assert.ok(state && state.type === 'roomState');
+  assert.deepEqual(
+    state.players.map((p) => p.color),
+    [0, 2, 1],
+    'and every phone is told the same colours',
+  );
+});
 
 test('a reconnect with a known sessionId restores the same slot and score', () => {
   const store = new RoomStore();
@@ -44,6 +78,32 @@ test('a reconnect with a known sessionId restores the same slot and score', () =
   assert.equal(back.player.id, playerId, 'same player record, not a ghost duplicate');
   assert.equal(back.player.score, 3200, 'score survives the reconnect');
   assert.equal(room.players.size, 2);
+});
+
+test('a second tab on the same session takes over, and the first is told why', () => {
+  const store = new RoomStore();
+  const { room } = roomWithHost(store);
+
+  const firstTab = new FakeConn();
+  const joined = store.join(firstTab, room.code, 'Kian', 'session-a');
+  assert.ok(joined.ok);
+
+  // The QR scanned twice: the camera app opens a second tab on the same browser storage.
+  const secondTab = new FakeConn();
+  const again = store.join(secondTab, room.code, 'Kian', 'session-a');
+  assert.ok(again.ok);
+  assert.equal(again.player.id, joined.player.id, 'still one player');
+  assert.equal(joined.player.conn, secondTab, 'the newest socket wins');
+  // The close code is what stops the first tab reconnecting and taking the slot straight back.
+  assert.equal(firstTab.closeCode, CLOSE_REPLACED);
+
+  // A late close event from the replaced socket must not mark the player disconnected.
+  assert.equal(store.disconnect(firstTab), undefined);
+  assert.equal(joined.player.conn, secondTab);
+
+  // Re-sending join on the socket you're already on is a resync, not a takeover.
+  assert.ok(store.join(secondTab, room.code, 'Kian', 'session-a').ok);
+  assert.equal(secondTab.closed, false);
 });
 
 test('the name-uniqueness check exempts the reconnecting player themselves', () => {

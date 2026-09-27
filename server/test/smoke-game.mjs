@@ -78,14 +78,15 @@ for (let round = 1; round <= 5; round++) {
   check(leaked === null, `round ${round}: no answer in roundStart`);
 
   // Host guesses Wellington fast; guest guesses the South Atlantic slowly.
-  host.send({ type: 'submitGuess', ...WELLINGTON, elapsedMs: 1500 });
-  check((await host.next('guessAck')).received === true, `round ${round}: guess acknowledged`);
+  host.send({ type: 'submitGuess', roundIndex: round - 1, ...WELLINGTON, elapsedMs: 1500 });
+  const ack = await host.next('guessAck');
+  check(ack.received === true && ack.roundIndex === round - 1, `round ${round}: guess acknowledged`);
 
   // With one of two players guessed, the round must still be open.
   const early = host.all('roundEnd');
   check(early.length === 0, `round ${round}: round stays open until everyone has guessed`);
 
-  guest.send({ type: 'submitGuess', lat: -40, lng: -20, elapsedMs: 38_000 });
+  guest.send({ type: 'submitGuess', roundIndex: round - 1, lat: -40, lng: -20, elapsedMs: 38_000 });
 
   const end = await host.next('roundEnd');
   await guest.next('roundEnd');

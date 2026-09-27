@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  CLOSE_REPLACED,
   CODE_ALPHABET,
   CODE_LENGTH,
   EMPTY_ROOM_TTL_MS,
@@ -7,6 +8,7 @@ import {
   IDLE_ROOM_TTL_MS,
   MAX_NAME_LENGTH,
   MAX_PLAYERS,
+  RECONNECT_GRACE_MS,
   ROOM_BACKSTOP_MS,
   ROUND_MS,
   ROUNDS_PER_GAME,
@@ -17,6 +19,7 @@ import {
 } from '@pangoguessr/shared';
 import type {
   ErrorCode,
+  GuessProgress,
   GuessResult,
   LatLng,
   LeaderboardRow,
@@ -38,8 +41,14 @@ import {
  */
 export interface Conn {
   send(msg: ServerMessage): void;
-  close(): void;
+  close(code?: number, reason?: string): void;
 }
+
+/**
+ * Why a socket went away. A `timeout` is the heartbeat giving up on a socket that has been
+ * silent for ~10s; anything else closed on its own and may well be back in a second.
+ */
+export type DropCause = 'closed' | 'timeout';
 
 export type Player = {
   id: string;
@@ -49,7 +58,14 @@ export type Player = {
   isHost: boolean;
   conn: Conn | null;
   disconnectedAt: number | null;
+  /**
+   * Until when a dropped player still counts as playing for the early-end check (§5), so a
+   * blip doesn't end the round under them. Null when connected, or when there's no grace.
+   */
+  graceUntil: number | null;
   score: number;
+  /** Palette slot, unique among the room's current players and kept across reconnects. */
+  color: number;
 };
 
 export type Guess = {
@@ -71,6 +87,8 @@ export type ActiveRound = {
   startedAt: number;
   /** Handle for the room's authoritative 46s backstop. */
   backstop: unknown;
+  /** Re-runs the early-end check when a dropped player's grace runs out. */
+  graceCheck: unknown;
   guesses: Map<string, Guess>;
 };
 
@@ -84,8 +102,14 @@ export type Room = {
   lastActivityAt: number;
   /** When the room last had zero connected players, for the 10-minute reap (§8). */
   emptySince: number | null;
-  /** Locations for this game, dealt at startRound so a game never repeats one. */
+  /**
+   * Locations for the next (or current) game, dealt without replacement so a game never
+   * repeats one. Dealt in the lobby rather than at Start, so every phone can preload the
+   * panoramas before its round comes up (§7).
+   */
   deck: RoundLocation[];
+  /** A deal is waiting on the pool to refill. */
+  dealing: boolean;
   round: ActiveRound | null;
   /** Kept so a player reconnecting into ROUND_RESULTS or GAME_OVER sees the screen (§4). */
   lastMessage: ServerMessage | null;
@@ -159,15 +183,16 @@ export class RoomStore {
       lastActivityAt: now,
       emptySince: null,
       deck: [],
+      dealing: false,
       round: null,
       lastMessage: null,
     };
     this.rooms.set(room.code, room);
 
-    // Someone is about to play: start sampling now, during the lobby, so Start is instant.
-    this.locations.prewarm?.();
-
     const player = this.addPlayer(room, conn, name, sessionId, true);
+    // Someone is about to play: deal now, during the lobby, so Start is instant and every
+    // phone that joins has the whole game's panoramas to preload.
+    this.dealDeck(room);
     return { ok: true, room, player };
   }
 
@@ -187,14 +212,17 @@ export class RoomStore {
       if (isNameTaken(room, name, existing.id)) {
         return fail('NAME_TAKEN', 'Someone in the room is already using that name.');
       }
-      // Two tabs on one sessionId: the newest socket wins, the old one is dropped.
+      // Two tabs on one sessionId: the newest socket wins, the old one is dropped. The close
+      // code tells the old tab why, so it stops rather than reconnecting and taking the slot
+      // straight back — which is how two tabs used to kick each other every few seconds.
       if (existing.conn && existing.conn !== conn) {
         this.connIndex.delete(existing.conn);
-        existing.conn.close();
+        existing.conn.close(CLOSE_REPLACED, 'replaced');
       }
       existing.name = name;
       existing.conn = conn;
       existing.disconnectedAt = null;
+      existing.graceUntil = null;
       this.connIndex.set(conn, { code: room.code, playerId: existing.id });
       this.touch(room, now);
       return { ok: true, room, player: existing };
@@ -269,14 +297,18 @@ export class RoomStore {
     if (!player.isHost) return fail('NOT_HOST', 'Only the host can start the game.');
     if (room.phase !== 'LOBBY') return fail('WRONG_PHASE', 'The game has already started.');
 
-    const deck = this.locations.take(ROUNDS_PER_GAME);
-    if (!deck) {
-      // The pool is still filling. Better an honest "try again in a moment" than a Start
-      // button that hangs while metadata round-trips happen (§7).
-      return fail('LOCATIONS_NOT_READY', 'Still finding locations — try again in a few seconds.');
+    // Normally dealt in the lobby. If that deal hasn't landed — a cold pool, or sampling
+    // failing — try once more rather than hang.
+    if (room.deck.length === 0) {
+      const deck = this.locations.take(ROUNDS_PER_GAME);
+      if (!deck) {
+        // Better an honest "try again in a moment" than a Start button that hangs while
+        // metadata round-trips happen (§7).
+        return fail('LOCATIONS_NOT_READY', 'Still finding locations — try again in a few seconds.');
+      }
+      room.deck = deck;
     }
 
-    room.deck = deck;
     for (const p of room.players.values()) p.score = 0;
     this.beginRound(room, 0, now);
     return { ok: true, room, player };
@@ -285,28 +317,48 @@ export class RoomStore {
   /**
    * Guesses are accepted until the room timer fires, and `elapsedMs` is clamped here so no
    * caller can bypass it (§5, §6).
+   *
+   * Clients resend an unacknowledged guess after a reconnect, so `roundIndex` pins it to the
+   * round it was made in. A resend that turns up after that round has closed is dropped
+   * quietly — never scored against the next round, and not worth an error either.
    */
-  submitGuess(conn: Conn, lat: number, lng: number, elapsedMs: number, now = Date.now()): Result {
+  submitGuess(
+    conn: Conn,
+    lat: number,
+    lng: number,
+    elapsedMs: number,
+    roundIndex?: number,
+    now = Date.now(),
+  ): Result {
     const located = this.locate(conn);
     if (!located) return fail('BAD_MESSAGE', 'You are not in a room.');
     const { room, player } = located;
+    if (Number.isInteger(roundIndex) && roundIndex !== room.round?.index) {
+      return { ok: true, room, player };
+    }
     if (room.phase !== 'ROUND_ACTIVE' || !room.round) {
       return fail('WRONG_PHASE', 'There is no round running.');
     }
     if (!isFiniteLatLng(lat, lng)) return fail('BAD_MESSAGE', 'That guess is not a coordinate.');
 
+    const ack: ServerMessage = { type: 'guessAck', received: true, roundIndex: room.round.index };
+
     // A double-tap must not corrupt the guessed-count the early-end check depends on (§5).
-    if (room.round.guesses.has(player.id)) return { ok: true, room, player };
+    // Still acknowledged: a resend after a reconnect has to hear back to stop resending.
+    if (room.round.guesses.has(player.id)) {
+      player.conn?.send(ack);
+      return { ok: true, room, player };
+    }
 
     room.round.guesses.set(player.id, {
       at: { lat, lng },
       // Missing or absurd values are treated as the worst case rather than rejected (§5).
       elapsedMs: Number.isFinite(elapsedMs) ? clamp(elapsedMs, 0, ROUND_MS) : ROUND_MS,
     });
-    player.conn?.send({ type: 'guessAck', received: true });
+    player.conn?.send(ack);
     this.touch(room, now);
 
-    this.maybeEndRound(room, now);
+    if (!this.maybeEndRound(room, now)) this.broadcastProgress(room, now);
     return { ok: true, room, player };
   }
 
@@ -326,6 +378,9 @@ export class RoomStore {
         const message: ServerMessage = { type: 'gameEnd', leaderboard: this.leaderboard(room) };
         room.lastMessage = message;
         this.broadcast(room, message);
+        // Without the phase change, every phone sat on the results phase with no results to
+        // draw — "Scoring the round" — until its 1.5s resync asked again.
+        this.broadcastState(room, now);
       } else {
         this.beginRound(room, nextIndex, now);
       }
@@ -341,6 +396,7 @@ export class RoomStore {
       room.round = null;
       room.lastMessage = null;
       for (const p of room.players.values()) p.score = 0;
+      this.dealDeck(room);
       this.touch(room, now);
       return { ok: true, room, player };
     }
@@ -362,27 +418,63 @@ export class RoomStore {
     if (!player.isHost) return fail('NOT_HOST', 'Only the host can cancel the game.');
     if (room.phase === 'LOBBY') return fail('WRONG_PHASE', 'There is no game to cancel.');
 
-    // Leaving this armed would fire into an idle lobby and try to end a round that no
+    // Leaving these armed would fire into an idle lobby and try to end a round that no
     // longer exists.
-    if (room.round) this.scheduler.cancel(room.round.backstop);
+    if (room.round) this.stopRoundTimers(room.round);
 
     room.phase = 'LOBBY';
     room.roundIndex = 0;
+    // A fresh deck: the abandoned game's panoramas have been sent to every phone, and some
+    // of them seen, so replaying them would hand the room answers it already knows.
     room.deck = [];
     room.round = null;
     room.lastMessage = null;
     for (const p of room.players.values()) p.score = 0;
+    this.dealDeck(room);
 
     this.touch(room, now);
     this.broadcastState(room, now);
     return { ok: true, room, player };
   }
 
+  /**
+   * Deals the next game's locations while the room is in the lobby, so every phone can load
+   * the panoramas before its round rather than during it (§7).
+   *
+   * Synchronous when the pool already holds a game, and then the caller's broadcast carries
+   * it. Otherwise — the first room after a cold start — it waits for the refill and
+   * broadcasts the deck itself when it lands.
+   */
+  private dealDeck(room: Room): void {
+    if (room.deck.length > 0 || room.dealing) return;
+
+    const deck = this.locations.take(ROUNDS_PER_GAME);
+    if (deck) {
+      room.deck = deck;
+      return;
+    }
+    if (!this.locations.deal) return;
+
+    room.dealing = true;
+    void this.locations
+      .deal(ROUNDS_PER_GAME)
+      .catch(() => null)
+      .then((dealt) => {
+        room.dealing = false;
+        // While we waited the room may have closed, or Start may have dealt for itself.
+        const stillWanted =
+          this.rooms.get(room.code) === room && room.phase === 'LOBBY' && room.deck.length === 0;
+        if (!dealt || !stillWanted) return;
+        room.deck = dealt;
+        this.broadcastState(room);
+      });
+  }
+
   private beginRound(room: Room, index: number, now: number): void {
     const location = room.deck[index];
     if (!location) throw new Error(`No location dealt for round ${index}`);
 
-    if (room.round) this.scheduler.cancel(room.round.backstop);
+    if (room.round) this.stopRoundTimers(room.round);
 
     room.phase = 'ROUND_ACTIVE';
     room.roundIndex = index;
@@ -395,6 +487,7 @@ export class RoomStore {
       // One authoritative timer for the room, so a player who never finishes loading can't
       // stall everyone else (§5).
       backstop: this.scheduler.schedule(() => this.endRound(room), ROOM_BACKSTOP_MS),
+      graceCheck: null,
       guesses: new Map(),
     };
 
@@ -412,7 +505,8 @@ export class RoomStore {
   /**
    * The round ends the moment every active player has guessed — the room does not sit on a
    * dead timer (§5). "Active" excludes disconnected players, who must not be able to hold
-   * the room hostage for the full 46s.
+   * the room hostage for the full 46s — except for the few seconds of grace after a drop,
+   * so a phone that blinked doesn't come back to find the round closed on it.
    *
    * Getting this predicate wrong is the likeliest cause of a round that mysteriously
    * refuses to end, which is why it's isolated here and unit tested.
@@ -420,7 +514,7 @@ export class RoomStore {
   maybeEndRound(room: Room, now = Date.now()): boolean {
     if (room.phase !== 'ROUND_ACTIVE' || !room.round) return false;
 
-    const active = [...room.players.values()].filter((p) => p.conn !== null);
+    const active = [...room.players.values()].filter((p) => isStillPlaying(p, now));
     // Everyone left mid-round: end it rather than waiting out the backstop on an empty room.
     if (active.length === 0) {
       this.endRound(room, now);
@@ -433,11 +527,48 @@ export class RoomStore {
     return false;
   }
 
+  /**
+   * Checks again when the next dropped player's grace runs out, since nothing else happens at
+   * that moment to prompt it. Only players the round is actually waiting on count — one who
+   * already guessed can't hold anything up.
+   */
+  private armGraceCheck(room: Room, now: number): void {
+    const round = room.round;
+    if (!round || room.phase !== 'ROUND_ACTIVE') return;
+    if (round.graceCheck !== null) this.scheduler.cancel(round.graceCheck);
+    round.graceCheck = null;
+
+    let due = Infinity;
+    for (const p of room.players.values()) {
+      if (p.conn === null && p.graceUntil !== null && p.graceUntil > now && !round.guesses.has(p.id)) {
+        due = Math.min(due, p.graceUntil);
+      }
+    }
+    if (due === Infinity) return;
+
+    round.graceCheck = this.scheduler.schedule(() => {
+      round.graceCheck = null;
+      if (room.round !== round) return;
+      // Never earlier than `due`, even when a test fires the timer without waiting for it.
+      const at = Math.max(Date.now(), due);
+      if (this.maybeEndRound(room, at)) return;
+      // Someone's grace ran out, so the room is waiting on one fewer.
+      this.broadcastProgress(room, at);
+      this.armGraceCheck(room, at);
+    }, due - now);
+  }
+
+  private stopRoundTimers(round: ActiveRound): void {
+    this.scheduler.cancel(round.backstop);
+    if (round.graceCheck !== null) this.scheduler.cancel(round.graceCheck);
+    round.graceCheck = null;
+  }
+
   private endRound(room: Room, now = Date.now()): void {
     const round = room.round;
     if (!round || room.phase !== 'ROUND_ACTIVE') return;
 
-    this.scheduler.cancel(round.backstop);
+    this.stopRoundTimers(round);
     room.phase = 'ROUND_RESULTS';
 
     const actual = round.location.at;
@@ -498,7 +629,7 @@ export class RoomStore {
    * A dropped socket does NOT remove the player — their slot and score are held for a
    * reconnect (§8). It only marks them disconnected and starts the clock.
    */
-  disconnect(conn: Conn, now = Date.now()): Room | undefined {
+  disconnect(conn: Conn, now = Date.now(), cause: DropCause = 'closed'): Room | undefined {
     const located = this.locate(conn);
     if (!located) return undefined;
     const { room, player } = located;
@@ -509,11 +640,14 @@ export class RoomStore {
 
     player.conn = null;
     player.disconnectedAt = now;
+    // A socket that closed is usually a phone about to reconnect. One the heartbeat gave up
+    // on has already been silent for longer than the grace would give it.
+    player.graceUntil = cause === 'timeout' ? null : now + RECONNECT_GRACE_MS;
 
     if (connectedCount(room) === 0) room.emptySince = now;
     // A phone that dropped mid-round must not hold the room for the full 46s — the others
-    // may now be the whole active set (§5).
-    this.maybeEndRound(room, now);
+    // may now be the whole active set once its grace runs out (§5).
+    if (!this.maybeEndRound(room, now)) this.armGraceCheck(room, now);
     return room;
   }
 
@@ -563,6 +697,8 @@ export class RoomStore {
 
   broadcastState(room: Room, now = Date.now()): void {
     const players = publicPlayers(room);
+    // Panorama IDs only. The rest of each RoundLocation is the answer (§3).
+    const panoIds = room.deck.map((location) => location.panoId);
     for (const player of room.players.values()) {
       player.conn?.send({
         type: 'roomState',
@@ -572,6 +708,7 @@ export class RoomStore {
         roundIndex: room.roundIndex,
         totalRounds: ROUNDS_PER_GAME,
         youId: player.id,
+        panoIds,
         ...(room.round ? { round: this.roundSnapshot(room, player, now) } : {}),
       });
     }
@@ -588,7 +725,34 @@ export class RoomStore {
       panoId: round.panoId,
       remainingMs: Math.max(0, ROOM_BACKSTOP_MS - (now - round.startedAt)),
       youGuessed: round.guesses.has(player.id),
+      progress: this.progress(room, now),
     };
+  }
+
+  /**
+   * "5 of 8 guessed". Counted against the same predicate the early-end check uses (§5), so
+   * the count reaching its total is exactly the moment the round closes.
+   */
+  private progress(room: Room, now: number): GuessProgress {
+    const guesses = room.round?.guesses;
+    let guessed = 0;
+    let total = 0;
+    for (const p of room.players.values()) {
+      const hasGuessed = guesses?.has(p.id) ?? false;
+      if (hasGuessed) guessed++;
+      if (hasGuessed || isStillPlaying(p, now)) total++;
+    }
+    return { guessed, total };
+  }
+
+  /** A count, never who or how well — nothing here spoils the round (§8). */
+  private broadcastProgress(room: Room, now: number): void {
+    if (room.phase !== 'ROUND_ACTIVE' || !room.round) return;
+    this.broadcast(room, {
+      type: 'guessProgress',
+      roundIndex: room.round.index,
+      progress: this.progress(room, now),
+    });
   }
 
   /**
@@ -622,7 +786,9 @@ export class RoomStore {
       isHost,
       conn,
       disconnectedAt: null,
+      graceUntil: null,
       score: 0,
+      color: freeColor(room),
     };
     room.players.set(player.id, player);
     room.bySession.set(sessionId, player.id);
@@ -650,13 +816,30 @@ export function publicPlayers(room: Room): PublicPlayer[] {
     isHost: p.isHost,
     connected: p.conn !== null,
     score: p.score,
+    color: p.color,
   }));
+}
+
+/**
+ * The lowest palette slot nobody in the room holds. A leaver's colour goes back into use, and
+ * with MAX_PLAYERS slots there is always one free.
+ */
+function freeColor(room: Room): number {
+  const taken = new Set([...room.players.values()].map((p) => p.color));
+  let color = 0;
+  while (taken.has(color)) color++;
+  return color;
 }
 
 export function connectedCount(room: Room): number {
   let n = 0;
   for (const p of room.players.values()) if (p.conn) n++;
   return n;
+}
+
+/** Connected, or dropped moments ago and very likely on their way back (§5). */
+function isStillPlaying(player: Player, now: number): boolean {
+  return player.conn !== null || (player.graceUntil !== null && now < player.graceUntil);
 }
 
 function findHost(room: Room): Player | undefined {

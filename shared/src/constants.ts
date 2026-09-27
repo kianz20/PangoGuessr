@@ -21,6 +21,21 @@ export const MAX_NAME_LENGTH = 16;
  */
 export const HOST_GRACE_MS = 30_000;
 
+/**
+ * How long a dropped player still counts as playing for the early-end check (§5). A screen
+ * lock or a WiFi-to-4G handoff closes the socket and reconnects within a second or two, and
+ * that blip must not end the round under them. Not applied when the heartbeat gave up on a
+ * silent socket: that phone has already been gone this long.
+ */
+export const RECONNECT_GRACE_MS = 5_000;
+
+/**
+ * WebSocket close code for "this player connected again somewhere else" — a second tab or
+ * device on the same sessionId. The replaced tab must not auto-reconnect, or the two take the
+ * slot back from each other forever (§8).
+ */
+export const CLOSE_REPLACED = 4001;
+
 /** Reaper thresholds (§8). */
 export const EMPTY_ROOM_TTL_MS = 10 * 60_000;
 export const IDLE_ROOM_TTL_MS = 2 * 60 * 60_000;

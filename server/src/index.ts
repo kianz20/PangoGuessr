@@ -3,8 +3,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { isValidCode } from '@pangoguessr/shared';
-import type { ClientMessage, ServerMessage } from '@pangoguessr/shared';
+import { CLOSE_REPLACED, isValidCode } from '@pangoguessr/shared';
+import type { ClientMessage, ReconnectDiag, ServerMessage } from '@pangoguessr/shared';
 import { loadDotEnv } from './env';
 import { createLocationSource, PooledLocationSource } from './locationSource';
 import { RoomStore, type Conn } from './rooms';
@@ -43,6 +43,23 @@ const server = createServer(app);
  */
 const usage = { roundsStarted: 0, playerRounds: 0, gamesStarted: 0 };
 
+/**
+ * Why sockets go away, so "people keep getting disconnected" can be answered from
+ * /api/health and the logs instead of guessed at.
+ */
+const drops = {
+  /** The heartbeat gave up on a socket that went silent without closing. */
+  timeouts: 0,
+  /** Closed by the phone or the network: screen locks, app switches, WiFi handoffs. */
+  closed: 0,
+  /** The same player connected again from another tab or device. */
+  replaced: 0,
+  /** Joins that restored a player after a drop, as reported by the client. */
+  rejoins: 0,
+  /** Of those, the ones where the whole page had reloaded — iOS discarding a tab, say. */
+  reloads: 0,
+};
+
 const store = new RoomStore(undefined, locations, (room, playerCount) => {
   usage.roundsStarted++;
   usage.playerRounds += playerCount;
@@ -63,6 +80,7 @@ app.get('/api/health', (_req, res) => {
       estimatedPanoramaLoads: usage.playerRounds,
     },
     locations: locations.stats(),
+    connections: { open: wss.clients.size, ...drops },
     // Enough to confirm a zone store is wired up without needing the admin password.
     zones: {
       groups: zoneStore.get().length,
@@ -189,31 +207,46 @@ if (IS_PROD) {
 
 const wss = new WebSocketServer({ server, path: '/ws' });
 
+type Link = {
+  openedAt: number;
+  /** Last time anything arrived — a pong, a heartbeat, a guess. Proof the phone is there. */
+  lastHeard: number;
+  /** Set by whoever closed it deliberately, so the close can be told apart from a drop. */
+  cause: 'timeout' | 'replaced' | null;
+};
+
+/** Phones go quiet without closing the socket; hearing from them is what proves they're there. */
+const links = new WeakMap<WebSocket, Link>();
+
 /** Adapts a `ws` socket to the transport-agnostic Conn the room store works with. */
 function connFor(socket: WebSocket): Conn {
   return {
     send(msg: ServerMessage) {
       if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(msg));
     },
-    close() {
-      socket.close();
+    close(code?: number, reason?: string) {
+      const link = links.get(socket);
+      if (link && code === CLOSE_REPLACED) link.cause = 'replaced';
+      socket.close(code, reason);
     },
   };
 }
 
-/** Phones go quiet without closing the socket; a pong is what proves they're still there. */
-const alive = new WeakMap<WebSocket, boolean>();
-
 wss.on('connection', (socket, req) => {
   const conn = connFor(socket);
-  alive.set(socket, true);
+  const now = Date.now();
+  const link: Link = { openedAt: now, lastHeard: now, cause: null };
+  links.set(socket, link);
   // Logged because a phone that can't reach the WS at all looks identical, from the other
   // devices, to a phone whose join was rejected.
   console.log(`[ws] connected from ${req.socket.remoteAddress}`);
 
-  socket.on('pong', () => alive.set(socket, true));
+  socket.on('pong', () => {
+    link.lastHeard = Date.now();
+  });
 
   socket.on('message', (raw) => {
+    link.lastHeard = Date.now();
     let msg: ClientMessage;
     try {
       msg = JSON.parse(raw.toString()) as ClientMessage;
@@ -224,14 +257,53 @@ wss.on('connection', (socket, req) => {
     handleMessage(conn, msg);
   });
 
-  socket.on('close', () => {
-    const room = store.disconnect(conn);
-    if (room) store.broadcastState(room);
+  // Without a listener, one malformed frame from one phone throws out of `ws` and takes the
+  // whole process down — and every room with it, since rooms live in memory (§8).
+  socket.on('error', (err) => {
+    console.warn(`[ws] socket error: ${err.message}`);
+  });
+
+  socket.on('close', (code) => {
+    const lived = Math.round((Date.now() - link.openedAt) / 1000);
+    if (link.cause === 'replaced') {
+      // Not a drop: the player is already back on their newer socket.
+      drops.replaced++;
+      console.log(`[ws] closed a socket its player replaced from another tab, after ${lived}s`);
+      return;
+    }
+
+    // Resolved before disconnecting, which forgets the socket.
+    const who = store.locate(conn);
+    const cause = link.cause === 'timeout' ? 'timeout' : 'closed';
+    const room = store.disconnect(conn, Date.now(), cause);
+    // Never joined, or left on purpose: nothing was dropped.
+    if (!room || !who) return;
+
+    drops[cause === 'timeout' ? 'timeouts' : 'closed']++;
+    console.log(
+      `[room ${room.code}] ${who.player.name} dropped — ${cause} (code ${code}) after ${lived}s`,
+    );
+    store.broadcastState(room);
   });
 });
 
+/** One line per recovery, so a pattern — one phone, one network, every lock screen — shows. */
+function logRejoin(code: string, name: string, diag: ReconnectDiag): void {
+  drops.rejoins++;
+  if (diag.cause === 'reload') drops.reloads++;
+  const down = diag.downMs === null ? '' : ` after ${(diag.downMs / 1000).toFixed(1)}s`;
+  console.log(
+    `[room ${code}] ${name} back${down} — ${diag.cause}, close code ${diag.closeCode}, ` +
+      `${diag.attempts} attempt(s)${diag.hidden ? ', page was hidden' : ''}`,
+  );
+}
+
 function handleMessage(conn: Conn, msg: ClientMessage): void {
   switch (msg?.type) {
+    case 'ping':
+      conn.send({ type: 'pong' });
+      return;
+
     case 'create': {
       const result = store.create(conn, msg.displayName, msg.sessionId);
       if (!result.ok) {
@@ -255,9 +327,13 @@ function handleMessage(conn: Conn, msg: ClientMessage): void {
         conn.send({ type: 'error', code: result.code, message: result.message });
         return;
       }
-      console.log(
-        `[room ${result.room.code}] ${result.player.name} joined (${result.room.players.size} players)`,
-      );
+      if (msg.diag) {
+        logRejoin(result.room.code, result.player.name, msg.diag);
+      } else {
+        console.log(
+          `[room ${result.room.code}] ${result.player.name} joined (${result.room.players.size} players)`,
+        );
+      }
       store.broadcastState(result.room);
       // Mid-results or mid-podium, the state alone isn't enough to draw the screen (§4).
       store.replayPhase(result.room, result.player);
@@ -294,7 +370,7 @@ function handleMessage(conn: Conn, msg: ClientMessage): void {
     }
 
     case 'submitGuess': {
-      const result = store.submitGuess(conn, msg.lat, msg.lng, msg.elapsedMs);
+      const result = store.submitGuess(conn, msg.lat, msg.lng, msg.elapsedMs, msg.roundIndex);
       if (!result.ok) {
         conn.send({ type: 'error', code: result.code, message: result.message });
       }
@@ -327,14 +403,29 @@ function handleMessage(conn: Conn, msg: ClientMessage): void {
   }
 }
 
-const HEARTBEAT_MS = 15_000;
+/**
+ * A phone that goes quiet without closing — a tunnel, a dead WiFi — is dropped after
+ * DEAD_AFTER_MS of silence, 10–14s in practice. Until then the room still counts it as
+ * playing, so this window is how long everyone else can be kept waiting on it (§5).
+ */
+const HEARTBEAT_MS = 4_000;
+const DEAD_AFTER_MS = 10_000;
+let lastBeat = Date.now();
 setInterval(() => {
+  const now = Date.now();
+  // On a 0.1 CPU free instance a long GC or CPU spike can hold up this timer, and then the
+  // pongs that did arrive are still queued behind it. Judging anyone on that tick would drop
+  // the whole server's players at once, so a late tick only pings.
+  const late = now - lastBeat > HEARTBEAT_MS * 2;
+  lastBeat = now;
   for (const socket of wss.clients) {
-    if (alive.get(socket) === false) {
+    const link = links.get(socket);
+    if (!late && link && now - link.lastHeard > DEAD_AFTER_MS) {
+      // A socket already replaced by a newer one can go silent too; that's not a drop.
+      link.cause ??= 'timeout';
       socket.terminate(); // fires 'close', which marks the player disconnected
       continue;
     }
-    alive.set(socket, false);
     socket.ping();
   }
 }, HEARTBEAT_MS).unref();

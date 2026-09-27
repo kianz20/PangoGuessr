@@ -33,6 +33,8 @@ function client(label) {
       socket.on('open', resolve);
       socket.on('error', reject);
     }),
+    /** Resolves with the close code. */
+    closed: new Promise((resolve) => socket.on('close', (code) => resolve(code))),
     send: (msg) => socket.send(JSON.stringify(msg)),
     async waitFor(type, timeoutMs = 4000) {
       const deadline = Date.now() + timeoutMs;
@@ -82,6 +84,9 @@ check(
   back.players.every((p) => p.connected),
   'everyone shows as connected again',
 );
+// Browsers can't see protocol pings, so this is how a phone finds out its socket is dead.
+guestBack.send({ type: 'ping' });
+check((await guestBack.waitFor('pong')).type === 'pong', 'the app-level heartbeat is answered');
 
 log('\n4. someone else cannot take a name already in use');
 const clash = client('clash');
@@ -112,6 +117,12 @@ rejoin.send({ type: 'join', code, displayName: 'Kian', sessionId: 'smoke-guest' 
 const rejoined = await rejoin.waitFor('roomState');
 check(rejoined.phase === 'ROUND_ACTIVE', 'reconnect gets through the lock, mid-round');
 check(!!rejoined.round && rejoined.round.remainingMs > 0, 'and is handed the live round');
+// `guestBack` was still connected on that session — a second tab. It must be told it was
+// replaced, or it reconnects and takes the slot straight back.
+check((await guestBack.closed) === 4001, 'the replaced socket is closed with code 4001');
+
+rejoin.send({ type: 'submitGuess', roundIndex: 0, lat: -41.3, lng: 174.8, elapsedMs: 1000 });
+check((await rejoin.waitFor('guessAck')).roundIndex === 0, 'guess acknowledged for its round');
 
 log('\n7. the host leaving closes the room for everyone');
 host.send({ type: 'leave' });

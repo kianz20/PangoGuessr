@@ -990,8 +990,58 @@ body {
   }
 }
 
+/*
+ * Over the game while its socket is down, never in place of it (§8). Sits below the round's
+ * header so the clock and the host's cancel button stay visible, and lets touches through to
+ * the panorama and map underneath — except on its own Leave button.
+ */
+.link-banner {
+  position: fixed;
+  z-index: 1000;
+  top: calc(max(12px, env(safe-area-inset-top)) + 64px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100vw - 32px);
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--warn) 22%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--warn) 50%, transparent);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.35);
+  font-size: 0.9rem;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.link-banner__spinner {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  border-top-color: var(--warn);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+.link-banner__leave {
+  flex: none;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .spinner {
+  .spinner,
+  .link-banner__spinner {
     animation-duration: 3s;
   }
 }
