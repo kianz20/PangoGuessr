@@ -1,23 +1,18 @@
 import { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import type { GuessResult, LatLng } from '@pangoguessr/shared';
-import { easeOutCubic, prefersReducedMotion } from '../motion';
+import { prefersReducedMotion } from '../motion';
 import { initials, type ColorOf } from '../players';
 import { play } from '../sound';
 
 const OSM_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 const OSM_ATTRIBUTION = '© OpenStreetMap';
 
-/** The reveal's beats: a moment on the answer, out to everyone, then the pins one by one. */
-const FOCUS_MS = 800;
-const FLY_MS = 1_000;
+/** The reveal's beats: a short beat on the answer, then the pins one by one. */
+const FOCUS_MS = 400;
 /** However many guessed, the pins take about this long — 20 players mustn't mean a minute. */
-const PINS_MS = 1_800;
-const MAX_PIN_STEP_MS = 320;
-/** Each guess's line growing from the pin toward the answer. */
-const LINE_MS = 380;
-/** Where the reveal starts: close enough on the answer to read as "here". */
-const START_ZOOM = 6;
+const PINS_MS = 900;
+const MAX_PIN_STEP_MS = 180;
 /** Pin diameters: yours is bigger, so it's the first one your eye finds. */
 const PIN = 26;
 const YOU_PIN = 32;
@@ -54,8 +49,8 @@ export function revealSchedule(results: GuessResult[]): {
   if (prefersReducedMotion()) return { landsAt: new Map(), doneAt: 0 };
   const order = revealOrder(results);
   const step = Math.min(MAX_PIN_STEP_MS, PINS_MS / Math.max(order.length, 1));
-  const landsAt = new Map(order.map((g, i) => [g.playerId, FOCUS_MS + FLY_MS + i * step]));
-  const doneAt = order.length === 0 ? FOCUS_MS : FOCUS_MS + FLY_MS + (order.length - 1) * step + LINE_MS;
+  const landsAt = new Map(order.map((g, i) => [g.playerId, FOCUS_MS + i * step]));
+  const doneAt = order.length === 0 ? FOCUS_MS : FOCUS_MS + (order.length - 1) * step;
   return { landsAt, doneAt };
 }
 
@@ -65,8 +60,9 @@ export function revealSchedule(results: GuessResult[]): {
  * legible on a phone: initials on each pin, bounds that fit everyone, and your own label
  * pinned open.
  *
- * Revealed rather than drawn at once: the answer first, then out to fit the room, then each
- * guess landing worst to best, so the room's closest guess is the last thing to appear.
+ * Revealed rather than drawn at once: the map starts fitted to the room with only the answer,
+ * then each guess lands worst to best, so the room's closest guess is the last thing to appear.
+ * The camera stays put — a fly-out on top of the pins was more motion than the reveal needs.
  */
 export function RevealMap({
   actual,
@@ -92,7 +88,6 @@ export function RevealMap({
     const map = L.map(host, { zoomControl: true, worldCopyJump: true });
     L.tileLayer(OSM_URL, { attribution: OSM_ATTRIBUTION }).addTo(map);
 
-    let alive = true;
     const timers: number[] = [];
     const later = (fn: () => void, ms: number) => timers.push(window.setTimeout(fn, ms));
 
@@ -107,19 +102,15 @@ export function RevealMap({
     const guesses = revealOrder(results);
     const bounds = L.latLngBounds([actual, ...guesses.map((g) => g.guess)]);
 
-    const fitEveryone = (animate: boolean) => {
-      // Nobody guessed: a fit on the answer alone would zoom to street level, which reads as
-      // a bug.
-      if (guesses.length === 0) map.setView(actual, 5, { animate });
-      else if (animate) map.flyToBounds(bounds, { ...FIT, duration: FLY_MS / 1000 });
-      else map.fitBounds(bounds, FIT);
-    };
+    // Nobody guessed: a fit on the answer alone would zoom to street level, which reads as a bug.
+    if (guesses.length === 0) map.setView(actual, 5, { animate: false });
+    else map.fitBounds(bounds, { ...FIT, animate: false });
 
-    const drop = (result: Guessed, animate: boolean) => {
+    const drop = (result: Guessed) => {
       const isYou = result.playerId === youId;
       const color = colorOfRef.current(result.playerId);
       // A line to the answer makes "how far off was that" readable at a glance.
-      const line = L.polyline([result.guess, animate ? result.guess : actual], {
+      L.polyline([result.guess, actual], {
         color: isYou ? '#f0b542' : color,
         weight: isYou ? 2.5 : 1.5,
         opacity: isYou ? 0.95 : 0.65,
@@ -143,41 +134,23 @@ export function RevealMap({
           offset: isYou ? [0, size] : [0, 0],
           className: `pin-label${isYou ? ' pin-label--you' : ''}`,
         });
-
-      if (!animate) return;
-      const from = result.guess;
-      const began = performance.now();
-      const grow = (now: number) => {
-        if (!alive) return;
-        const t = easeOutCubic(Math.min(1, (now - began) / LINE_MS));
-        line.setLatLngs([
-          from,
-          { lat: from.lat + (actual.lat - from.lat) * t, lng: from.lng + (actual.lng - from.lng) * t },
-        ]);
-        if (t < 1) requestAnimationFrame(grow);
-      };
-      requestAnimationFrame(grow);
     };
 
     play('answer');
     if (prefersReducedMotion()) {
-      fitEveryone(false);
-      for (const guess of guesses) drop(guess, false);
+      for (const guess of guesses) drop(guess);
     } else {
-      map.setView(actual, START_ZOOM, { animate: false });
-      later(() => fitEveryone(true), FOCUS_MS);
       const { landsAt } = revealSchedule(results);
       // Each pin a note higher than the last, so the room's closest guess lands on the top one.
       guesses.forEach((guess, i) =>
         later(() => {
-          drop(guess, true);
+          drop(guess);
           play('land', { step: i });
         }, landsAt.get(guess.playerId)!),
       );
     }
 
     return () => {
-      alive = false;
       timers.forEach(window.clearTimeout);
       map.remove();
     };

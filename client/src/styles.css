@@ -1538,7 +1538,7 @@ button {
   }
 }
 
-/* Reveal map: initials pins that pop in, and an answer pin that drops. */
+/* Reveal map: initials pins and the answer pin fade in, with no bounce. */
 .map-pin {
   background: none;
   border: 0;
@@ -1556,7 +1556,7 @@ button {
   border: 2px solid #fff;
   box-shadow: 0 2px 6px rgb(0 0 0 / 45%);
   font: 800 10px/1 var(--font-body);
-  animation: pin-pop 320ms cubic-bezier(0.3, 1.6, 0.5, 1) both;
+  animation: pin-in 200ms ease-out both;
 }
 
 .map-avatar--you {
@@ -1579,7 +1579,7 @@ button {
 .pin-drop {
   display: block;
   transform-origin: 50% 100%;
-  animation: pin-drop 450ms cubic-bezier(0.3, 1.5, 0.5, 1) both;
+  animation: pin-in 200ms ease-out both;
 }
 
 @keyframes pin-pop {
@@ -1593,14 +1593,10 @@ button {
   }
 }
 
-@keyframes pin-drop {
+@keyframes pin-in {
   from {
-    transform: translateY(-24px) scale(0.6);
+    transform: scale(0.8);
     opacity: 0;
-  }
-  to {
-    transform: none;
-    opacity: 1;
   }
 }
 
@@ -1633,16 +1629,11 @@ button {
   border: 1px solid var(--line);
   border-radius: 12px;
   opacity: 0;
-  transform: translateY(6px);
-  transition:
-    opacity 300ms ease,
-    transform 300ms ease;
-  transition-delay: calc(var(--i, 0) * 90ms);
+  transition: opacity 250ms ease;
 }
 
 .awards.is-shown .award {
   opacity: 1;
-  transform: none;
 }
 
 .award--you {
@@ -1681,18 +1672,13 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
-.board__list--staggered .row {
+.board__list--fade .row {
   opacity: 0;
-  transform: translateY(4px);
-  transition:
-    opacity 260ms ease,
-    transform 260ms ease;
-  transition-delay: calc(var(--i, 0) * 45ms);
+  transition: opacity 250ms ease;
 }
 
-.board__list--staggered.is-shown .row {
+.board__list--fade.is-shown .row {
   opacity: 1;
-  transform: none;
 }
 
 /* Podium: avatar above each name. */
@@ -2232,7 +2218,7 @@ button {
 
   .button,
   .award,
-  .board__list--staggered .row,
+  .board__list--fade .row,
   .yours__rank,
   .pano__reset,
   .sound-toggle,

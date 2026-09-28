@@ -71,7 +71,7 @@ export function useFlip(list: RefObject<HTMLElement>, order: string): void {
       child.style.transform = `translateY(${was - top}px)`;
       // Commit the inverted position before transitioning away from it.
       void child.offsetHeight;
-      child.style.transition = 'transform 650ms cubic-bezier(0.2, 0.8, 0.2, 1)';
+      child.style.transition = 'transform 400ms cubic-bezier(0.2, 0.8, 0.2, 1)';
       child.style.transform = '';
     }
   }, [list, order]);

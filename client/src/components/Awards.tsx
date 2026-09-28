@@ -1,4 +1,3 @@
-import type { CSSProperties } from 'react';
 import type { ColorOf } from '../players';
 import { Avatar } from './Avatar';
 
@@ -28,11 +27,10 @@ export function Awards({
   if (awards.length === 0) return null;
   return (
     <ul className={`awards${shown ? ' is-shown' : ''}`} aria-label={label}>
-      {awards.map((award, i) => (
+      {awards.map((award) => (
         <li
           key={award.id}
           className={`award${award.playerId === youId ? ' award--you' : ''}`}
-          style={{ '--i': i } as CSSProperties}
         >
           <span className="award__title">
             <span aria-hidden>{award.icon}</span> {award.title}

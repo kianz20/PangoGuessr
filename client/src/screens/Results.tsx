@@ -1,4 +1,4 @@
-import { useMemo, useRef, type CSSProperties } from 'react';
+import { useMemo, useRef } from 'react';
 import { rankByScore } from '@pangoguessr/shared';
 import type { GuessResult, LeaderboardRow } from '@pangoguessr/shared';
 import { Avatar } from '../components/Avatar';
@@ -12,7 +12,7 @@ import type { ColorOf } from '../players';
 import type { ResultsView } from '../useRoom';
 
 /** For someone with no pin on the map, whose points (0) have nothing to wait for. */
-const YOURS_WITHOUT_PIN_MS = 600;
+const YOURS_WITHOUT_PIN_MS = 400;
 
 /**
  * Direction only, no number: the question between rounds is "am I climbing or sliding",
@@ -109,7 +109,7 @@ export function Results({
   const revealed = useAfter(schedule.doneAt);
   const yourPoints = useCountUp(you?.points ?? 0, {
     delayMs: schedule.landsAt.get(youId) ?? YOURS_WITHOUT_PIN_MS,
-    durationMs: 1_000,
+    durationMs: 600,
   });
 
   return (
@@ -164,12 +164,11 @@ export function Results({
       <div className="boards">
         <section className="board">
           <h2 className="board__title">This round</h2>
-          <ul className={`board__list board__list--staggered${revealed ? ' is-shown' : ''}`}>
-            {results.results.map((result, i) => (
+          <ul className={`board__list board__list--fade${revealed ? ' is-shown' : ''}`}>
+            {results.results.map((result) => (
               <li
                 key={result.playerId}
                 className={`row${result.playerId === youId ? ' row--you' : ''}`}
-                style={{ '--i': i } as CSSProperties}
               >
                 <Avatar name={result.name} color={colorOf(result.playerId)} size="sm" />
                 {/* Stacked: half a phone's width can't fit a name beside the distance. */}
@@ -287,6 +286,6 @@ function OverallBoard({
 }
 
 function Total({ from, to }: { from: number; to: number }) {
-  const value = useCountUp(to, { from, durationMs: 900 });
+  const value = useCountUp(to, { from, durationMs: 600 });
   return <span className="row__total">{value.toLocaleString()}</span>;
 }
