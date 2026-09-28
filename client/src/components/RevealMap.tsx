@@ -3,6 +3,7 @@ import L from 'leaflet';
 import type { GuessResult, LatLng } from '@pangoguessr/shared';
 import { easeOutCubic, prefersReducedMotion } from '../motion';
 import { initials, type ColorOf } from '../players';
+import { play } from '../sound';
 
 const OSM_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 const OSM_ATTRIBUTION = '© OpenStreetMap';
@@ -158,6 +159,7 @@ export function RevealMap({
       requestAnimationFrame(grow);
     };
 
+    play('answer');
     if (prefersReducedMotion()) {
       fitEveryone(false);
       for (const guess of guesses) drop(guess, false);
@@ -165,7 +167,13 @@ export function RevealMap({
       map.setView(actual, START_ZOOM, { animate: false });
       later(() => fitEveryone(true), FOCUS_MS);
       const { landsAt } = revealSchedule(results);
-      for (const guess of guesses) later(() => drop(guess, true), landsAt.get(guess.playerId)!);
+      // Each pin a note higher than the last, so the room's closest guess lands on the top one.
+      guesses.forEach((guess, i) =>
+        later(() => {
+          drop(guess, true);
+          play('land', { step: i });
+        }, landsAt.get(guess.playerId)!),
+      );
     }
 
     return () => {

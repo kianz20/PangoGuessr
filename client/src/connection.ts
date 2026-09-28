@@ -12,7 +12,7 @@ import type { ClientMessage, ReconnectDiag, ServerMessage } from '@pangoguessr/s
  */
 
 /** Past this, a slow first connect is almost certainly a cold start, not a slow phone (§9). */
-const WAKING_AFTER_MS = 3_000;
+export const WAKING_AFTER_MS = 3_000;
 
 /**
  * Once in a room the server is known to be awake, so a handshake this slow is a bad network,

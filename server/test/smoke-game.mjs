@@ -116,6 +116,10 @@ check(
   over.leaderboard[0].score >= over.leaderboard[1].score,
   'leaderboard is sorted best-first',
 );
+check(
+  over.rounds.length === 5 && over.rounds.every((r) => r.results.length === 2),
+  'the recap holds every round, with both players in each',
+);
 
 log('\n4. play again returns to the lobby with scores cleared');
 host.send({ type: 'advance' });

@@ -377,6 +377,12 @@ function handleMessage(conn: Conn, msg: ClientMessage): void {
       return;
     }
 
+    case 'preloaded': {
+      const room = store.markPreloaded(conn, msg.panoId);
+      if (room) store.broadcastState(room);
+      return;
+    }
+
     case 'cancelGame': {
       const result = store.cancelGame(conn);
       if (!result.ok) {

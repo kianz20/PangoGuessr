@@ -2,21 +2,17 @@ import { useMemo, useRef, type CSSProperties } from 'react';
 import { rankByScore } from '@pangoguessr/shared';
 import type { GuessResult, LeaderboardRow } from '@pangoguessr/shared';
 import { Avatar } from '../components/Avatar';
+import { Awards, type Award } from '../components/Awards';
+import { SoundToggle } from '../components/Brand';
 import { CancelGame } from '../components/CancelGame';
 import { RevealMap, revealSchedule } from '../components/RevealMap';
+import { formatDistance } from '../format';
 import { useAfter, useCountUp, useFlip } from '../motion';
 import type { ColorOf } from '../players';
 import type { ResultsView } from '../useRoom';
 
 /** For someone with no pin on the map, whose points (0) have nothing to wait for. */
 const YOURS_WITHOUT_PIN_MS = 600;
-
-/** Distances read better rounded to something a human would say out loud. */
-function formatDistance(km: number): string {
-  if (km < 1) return `${Math.round(km * 1000)} m`;
-  if (km < 100) return `${km.toFixed(1)} km`;
-  return `${Math.round(km).toLocaleString()} km`;
-}
 
 /**
  * Direction only, no number: the question between rounds is "am I climbing or sliding",
@@ -35,15 +31,6 @@ function RankDelta({ value }: { value: number }) {
     </span>
   );
 }
-
-type Award = {
-  id: 'closest' | 'lost' | 'quickest';
-  icon: string;
-  title: string;
-  playerId: string;
-  name: string;
-  detail: string;
-};
 
 /**
  * Something for the room to cheer or jeer. Guess time finally gets a job here — it is recorded
@@ -128,6 +115,9 @@ export function Results({
   return (
     <main className="screen screen--results">
       <header className="results__head">
+        <div className="results__tools">
+          <SoundToggle compact />
+        </div>
         <p className="results__round">
           Round {results.roundIndex + 1}/{totalRounds}
         </p>
@@ -161,27 +151,13 @@ export function Results({
         </section>
       )}
 
-      {awards.length > 0 && (
-        // Always laid out, only faded in, so nothing below jumps when it appears.
-        <ul className={`awards${revealed ? ' is-shown' : ''}`} aria-label="This round’s awards">
-          {awards.map((award, i) => (
-            <li
-              key={award.id}
-              className={`award${award.playerId === youId ? ' award--you' : ''}`}
-              style={{ '--i': i } as CSSProperties}
-            >
-              <span className="award__title">
-                <span aria-hidden>{award.icon}</span> {award.title}
-              </span>
-              <span className="award__who">
-                <Avatar name={award.name} color={colorOf(award.playerId)} size="sm" />
-                <span className="award__name">{award.name}</span>
-              </span>
-              <span className="award__detail">{award.detail}</span>
-            </li>
-          ))}
-        </ul>
-      )}
+      <Awards
+        awards={awards}
+        youId={youId}
+        colorOf={colorOf}
+        shown={revealed}
+        label="This round’s awards"
+      />
 
       {/* Side by side rather than stacked: 20 players is 40 rows in one column, which is
           three screens of scrolling on a phone before the host can reach "Next" (§8). */}

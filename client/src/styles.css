@@ -11,6 +11,10 @@
   --warn: #f0b542;
   --danger: #ef6b6b;
   --radius: 14px;
+  /* One display face for the loud things — headings, the room code, the clock — and the
+     system font for everything you read. */
+  --font-display: 'Fredoka Variable', ui-rounded, 'SF Pro Rounded', system-ui, sans-serif;
+  --font-body: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   color-scheme: dark;
 }
 
@@ -25,9 +29,13 @@ body {
 }
 
 body {
-  background: var(--bg);
+  /* A faint glow from the top, so the dark reads as night sky rather than an empty page. */
+  background:
+    radial-gradient(120% 55% at 50% -12%, color-mix(in srgb, var(--accent) 9%, transparent), transparent 62%)
+      fixed,
+    var(--bg);
   color: var(--text);
-  font: 16px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font: 16px/1.45 var(--font-body);
   -webkit-text-size-adjust: 100%;
 }
 
@@ -55,14 +63,21 @@ body {
   text-align: center;
 }
 
-.brand h1 {
+.wordmark {
   margin: 0;
-  font-size: 2rem;
-  letter-spacing: -0.02em;
+  font-family: var(--font-display);
+  font-size: 2.5rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.01em;
+}
+
+.wordmark__accent {
+  color: var(--accent);
 }
 
 .brand__tag {
-  margin: 4px 0 0;
+  margin: 6px 0 0;
   color: var(--muted);
 }
 
@@ -756,14 +771,6 @@ body {
   justify-content: flex-end;
   align-items: center;
   gap: 8px;
-  opacity: 0;
-  transform: translateY(12px);
-  transition: opacity 400ms ease, transform 400ms ease;
-}
-
-.step--shown {
-  opacity: 1;
-  transform: none;
 }
 
 .step__players {
@@ -1566,7 +1573,7 @@ button {
   color: #0b1118;
   border: 2px solid #fff;
   box-shadow: 0 2px 6px rgb(0 0 0 / 45%);
-  font: 800 10px/1 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font: 800 10px/1 var(--font-body);
   animation: pin-pop 320ms cubic-bezier(0.3, 1.6, 0.5, 1) both;
 }
 
@@ -1741,6 +1748,497 @@ button {
   color: color-mix(in srgb, var(--warn) 80%, var(--text));
 }
 
+/* ---------------------------------------------------------------------------------------
+ * Identity: the display face, screen transitions, and the lobby, podium and waiting screens.
+ * ------------------------------------------------------------------------------------- */
+
+.code,
+.input--code,
+.round__clock,
+.round-intro__label,
+.results__place,
+.over__title,
+.status__title,
+.players__title,
+.step__rank,
+.finish__line {
+  font-family: var(--font-display);
+}
+
+/* The display face has no tabular figures, so the clock is pinned by its right edge and given
+   room for two digits: the seconds tick without shuffling anything beside them. */
+.round__clock {
+  min-width: 2.6em;
+  text-align: right;
+}
+
+/*
+ * Screens arrive rather than cut in. Backwards-filled, so once it's over the animation lets go
+ * and leaves transforms to the rules and scripts that own them. The round only fades: anything
+ * fixed inside a transformed element is pinned to it instead of the viewport.
+ */
+.screen {
+  animation: screen-in 320ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+
+.screen--round {
+  animation-name: screen-fade;
+}
+
+@keyframes screen-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+@keyframes screen-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+/* The sound switch: a pill in the lobby, an icon in the results header. */
+.sound-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 50px;
+  padding: 0 16px;
+  font: inherit;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition:
+    color 120ms ease,
+    border-color 120ms ease,
+    background-color 120ms ease,
+    transform 90ms ease;
+}
+
+.sound-toggle svg {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  fill: currentColor;
+}
+
+.sound-toggle__waves {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.sound-toggle.is-on {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.sound-toggle:active {
+  transform: scale(0.95);
+}
+
+.sound-toggle--compact {
+  width: 36px;
+  height: 36px;
+  min-height: 0;
+  padding: 0;
+  border-radius: 50%;
+}
+
+.sound-toggle--compact svg {
+  width: 18px;
+  height: 18px;
+}
+
+.results__head,
+.over__head {
+  position: relative;
+  /* Room for the sound button, so a long place name never runs under it. */
+  padding: 0 44px;
+}
+
+.results__tools {
+  position: absolute;
+  top: 0;
+  right: 0;
+}
+
+/* Waiting: a progress bar that's honest about being a guess, and something to read. */
+.screen--waking {
+  gap: 14px;
+}
+
+.wake {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: min(100%, 300px);
+}
+
+.wake__bar {
+  width: 100%;
+  height: 8px;
+  background: var(--surface-2);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.wake__fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent) 55%, var(--surface-2)),
+    var(--accent)
+  );
+  transition: width 250ms linear;
+}
+
+.wake__time {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.fun-fact {
+  width: min(100%, 340px);
+  padding: 14px 16px;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  animation: fact-in 500ms ease backwards;
+}
+
+.fun-fact__kind {
+  margin: 0 0 4px;
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Three lines' worth, so a short fact after a long one doesn't pull the Cancel button up. */
+.fun-fact__text {
+  margin: 0;
+  min-height: 4.35em;
+  font-size: 0.95rem;
+}
+
+@keyframes fact-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+/* Lobby: who's arrived, and whose phone has round 1 ready. */
+.players__ready {
+  font-family: var(--font-body);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.players__ready--all {
+  color: var(--accent);
+}
+
+.player {
+  animation: player-in 420ms cubic-bezier(0.2, 0.9, 0.3, 1.15) backwards;
+}
+
+.player .avatar {
+  animation: pin-pop 420ms 90ms cubic-bezier(0.3, 1.6, 0.5, 1) backwards;
+}
+
+@keyframes player-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
+}
+
+.player__avatar {
+  position: relative;
+  flex: none;
+  display: inline-grid;
+}
+
+.ready-badge {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 2px solid var(--surface);
+}
+
+.ready-badge--ready {
+  display: grid;
+  place-items: center;
+  background: var(--accent);
+  animation: pin-pop 320ms cubic-bezier(0.3, 1.6, 0.5, 1) backwards;
+}
+
+.ready-badge--ready svg {
+  width: 9px;
+  height: 9px;
+  fill: none;
+  stroke: var(--accent-ink);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ready-badge--loading {
+  background: var(--surface-2);
+}
+
+.ready-badge--loading::after {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  border-top-color: var(--muted);
+  animation: spin 0.9s linear infinite;
+}
+
+.lobby__row {
+  display: flex;
+  gap: 8px;
+}
+
+.lobby__row > * {
+  flex: 1;
+}
+
+/* Podium: the steps are there from the start; the players arrive on them. */
+.step__block {
+  position: relative;
+  transform-origin: 50% 100%;
+  animation: block-rise 520ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+
+.step--1 .step__block {
+  animation-delay: 80ms;
+}
+
+.step--3 .step__block {
+  animation-delay: 160ms;
+}
+
+@keyframes block-rise {
+  from {
+    opacity: 0;
+    transform: scaleY(0.15);
+  }
+}
+
+.step__players {
+  opacity: 0;
+  transform: translateY(14px) scale(0.9);
+  transition:
+    opacity 350ms ease,
+    transform 480ms cubic-bezier(0.3, 1.5, 0.5, 1);
+}
+
+.step--shown .step__players {
+  opacity: 1;
+  transform: none;
+}
+
+/* The held breath before first place: the empty top step glows. */
+.step__block::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.step--suspense .step__block::after {
+  animation: suspense 650ms ease-in-out infinite alternate;
+}
+
+@keyframes suspense {
+  from {
+    box-shadow: 0 0 0 0 transparent;
+  }
+  to {
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent),
+      0 0 30px color-mix(in srgb, var(--accent) 50%, transparent);
+  }
+}
+
+.crown {
+  width: 30px;
+  height: 20px;
+  margin-bottom: -2px;
+  fill: #ffd166;
+  filter: drop-shadow(0 2px 3px rgb(0 0 0 / 40%));
+}
+
+.step--shown .crown {
+  animation: crown-drop 600ms 300ms cubic-bezier(0.3, 1.5, 0.5, 1) backwards;
+}
+
+@keyframes crown-drop {
+  from {
+    opacity: 0;
+    transform: translateY(-20px) rotate(-14deg);
+  }
+}
+
+/* Everything under the podium waits for the winner. */
+.over__after {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  opacity: 0;
+  transform: translateY(8px);
+  transition:
+    opacity 400ms ease,
+    transform 400ms ease;
+}
+
+.over__after.is-shown {
+  opacity: 1;
+  transform: none;
+}
+
+.over__subtitle {
+  margin: 8px 0 0;
+}
+
+.finish {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.finish--won {
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.finish__main {
+  min-width: 0;
+}
+
+.finish__line {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.finish__meta {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.recap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.map--recap {
+  height: 250px;
+}
+
+.recap__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.recap__round {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 0.9rem;
+  color: var(--text);
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease,
+    transform 90ms ease;
+}
+
+.recap__round:active {
+  transform: scale(0.98);
+}
+
+.recap__round.is-selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+.recap__number,
+.recap-pin {
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font: 800 0.75rem/1 var(--font-body);
+}
+
+.recap__number {
+  flex: none;
+  width: 24px;
+  height: 24px;
+}
+
+.recap-pin {
+  width: 100%;
+  height: 100%;
+  border: 2px solid #0f1720;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 45%);
+}
+
+.recap-pin--you {
+  background: var(--warn);
+  color: #2a1a00;
+  border-color: #fff;
+}
+
+.over__actions.results__actions--sticky {
+  margin-top: auto;
+}
+
 /* Last in the file on purpose: it has to beat the rules above at equal specificity. */
 @media (prefers-reduced-motion: reduce) {
   .round__clock--urgent,
@@ -1748,7 +2246,15 @@ button {
   .round-intro,
   .round-intro__label,
   .map-avatar,
-  .pin-drop {
+  .pin-drop,
+  .screen,
+  .player,
+  .player .avatar,
+  .ready-badge--ready,
+  .fun-fact,
+  .step__block,
+  .step--suspense .step__block::after,
+  .step--shown .crown {
     animation: none;
   }
 
@@ -1756,7 +2262,12 @@ button {
   .award,
   .board__list--staggered .row,
   .yours__rank,
-  .pano__reset {
+  .pano__reset,
+  .sound-toggle,
+  .step__players,
+  .over__after,
+  .recap__round,
+  .wake__fill {
     transition: none;
   }
 }

@@ -4,7 +4,6 @@ import type {
   ErrorCode,
   GuessProgress,
   LatLng,
-  LeaderboardRow,
   ReconnectDiag,
   RoomStateMsg,
   ServerMessage,
@@ -34,6 +33,8 @@ export type RoundView = {
 };
 
 export type ResultsView = Extract<ServerMessage, { type: 'roundEnd' }>;
+/** The podium: final standings, plus every round for the recap. */
+export type FinalView = Extract<ServerMessage, { type: 'gameEnd' }>;
 
 export type Status =
   | 'home'
@@ -69,7 +70,7 @@ export function useRoom(initialIntent: Intent | null = null) {
   const [notice, setNotice] = useState<string | null>(null);
   const [round, setRound] = useState<RoundView | null>(null);
   const [results, setResults] = useState<ResultsView | null>(null);
-  const [finalBoard, setFinalBoard] = useState<LeaderboardRow[] | null>(null);
+  const [final, setFinal] = useState<FinalView | null>(null);
   /** Positive means they moved up the board since the previous round. */
   const [rankDeltas, setRankDeltas] = useState<Record<string, number>>({});
   /**
@@ -131,7 +132,7 @@ export function useRoom(initialIntent: Intent | null = null) {
       setRoom(null);
       setRound(null);
       setResults(null);
-      setFinalBoard(null);
+      setFinal(null);
       setLinkDownSince(null);
       setNotice(message);
       setStatus('home');
@@ -236,7 +237,7 @@ export function useRoom(initialIntent: Intent | null = null) {
         if (msg.phase === 'LOBBY') {
           setRound(null);
           setResults(null);
-          setFinalBoard(null);
+          setFinal(null);
           // A new game starts everyone level, so last game's movement is meaningless.
           previousRanksRef.current = null;
           setRankDeltas({});
@@ -247,7 +248,7 @@ export function useRoom(initialIntent: Intent | null = null) {
       if (msg.type === 'roundStart') {
         if (pendingGuessRef.current?.roundIndex !== msg.roundIndex) pendingGuessRef.current = null;
         setResults(null);
-        setFinalBoard(null);
+        setFinal(null);
         setRound({
           index: msg.roundIndex,
           panoId: msg.panoId,
@@ -296,7 +297,7 @@ export function useRoom(initialIntent: Intent | null = null) {
       }
 
       if (msg.type === 'gameEnd') {
-        setFinalBoard(msg.leaderboard);
+        setFinal(msg);
         setResults(null);
         setRound(null);
         return;
@@ -369,7 +370,7 @@ export function useRoom(initialIntent: Intent | null = null) {
    */
   const phase = room?.phase;
   const missingPayload =
-    (phase === 'ROUND_RESULTS' && !results) || (phase === 'GAME_OVER' && !finalBoard);
+    (phase === 'ROUND_RESULTS' && !results) || (phase === 'GAME_OVER' && !final);
 
   useEffect(() => {
     if (!missingPayload) return;
@@ -401,6 +402,11 @@ export function useRoom(initialIntent: Intent | null = null) {
   const startRound = useCallback(() => connection.send({ type: 'startRound' }), [connection]);
   const advance = useCallback(() => connection.send({ type: 'advance' }), [connection]);
   const cancelGame = useCallback(() => connection.send({ type: 'cancelGame' }), [connection]);
+  /** Round 1's panorama has loaded on this phone — the lobby's ready tick (§7). */
+  const reportPreloaded = useCallback(
+    (panoId: string) => connection.send({ type: 'preloaded', panoId }),
+    [connection],
+  );
 
   /** Their panorama is visible, so their 40 seconds start now (§5) — once per round. */
   const markRoundStarted = useCallback((index: number) => {
@@ -434,7 +440,7 @@ export function useRoom(initialIntent: Intent | null = null) {
     notice,
     round,
     results,
-    finalBoard,
+    final,
     rankDeltas,
     linkDownSince,
     createRoom,
@@ -445,6 +451,7 @@ export function useRoom(initialIntent: Intent | null = null) {
     startRound,
     advance,
     cancelGame,
+    reportPreloaded,
     markRoundStarted,
     submitGuess,
     setNotice,

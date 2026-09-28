@@ -3,6 +3,7 @@ import type { GuessProgress, LatLng } from '@pangoguessr/shared';
 import { CancelGame } from '../components/CancelGame';
 import { GuessMap } from '../components/GuessMap';
 import { PanoramaView } from '../components/PanoramaView';
+import { play } from '../sound';
 import type { RoundView } from '../useRoom';
 
 /** Wide enough for the map to sit open over the panorama from the start. */
@@ -83,6 +84,7 @@ export function Round({
   const submit = useCallback((at: LatLng, elapsedMs: number) => {
     if (submittedRef.current) return;
     submittedRef.current = true;
+    play('lock');
     onGuessRef.current(roundRef.current.index, at, elapsedMs);
     // Back to the corner on a phone, so they can look at the view again while they wait —
     // with their pin still showing.
@@ -96,6 +98,7 @@ export function Round({
 
   useEffect(() => {
     if (!intro) return;
+    play('roundStart');
     const timer = window.setTimeout(() => {
       introDoneRef.current = true;
       setIntro(false);
@@ -145,11 +148,15 @@ export function Round({
         ? 'urgent'
         : null;
 
-  // A nudge at ten seconds and each of the last three — only for someone still deciding.
+  // A nudge at ten seconds and each of the last three — only for someone still deciding. The
+  // ticks play either way: a phone with sound on is usually doing it for the whole room.
   useEffect(() => {
-    if (!clockRunning || guessed) return;
+    if (!clockRunning || seconds <= 0) return;
+    if (seconds === URGENT_S || (seconds <= CRITICAL_S && seconds > 3)) play('tick');
+    else if (seconds <= 3) play('tickFinal');
+    if (guessed) return;
     if (seconds === URGENT_S) buzz(60);
-    else if (seconds > 0 && seconds <= 3) buzz(35);
+    else if (seconds <= 3) buzz(35);
   }, [seconds]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const progress = round.progress;

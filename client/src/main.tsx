@@ -2,6 +2,8 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import { readHandoff } from './session';
+// Bundled rather than fetched from a font CDN: one less origin, and it works offline.
+import '@fontsource-variable/fredoka/wght.css';
 import 'leaflet/dist/leaflet.css';
 import './styles.css';
 

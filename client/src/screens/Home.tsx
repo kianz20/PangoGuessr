@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { MAX_NAME_LENGTH, isValidCode, normalizeCode } from '@pangoguessr/shared';
+import { Wordmark } from '../components/Brand';
 
 const NAME_KEY = 'pangoguessr.name';
 
@@ -52,9 +53,9 @@ export function Home({
   return (
     <main className="screen screen--home">
       <header className="brand">
-        <img className="brand__mark" src="/favicon.svg" alt="" width={44} height={44} />
+        <img className="brand__mark" src="/favicon.svg" alt="" width={52} height={52} />
         <div>
-          <h1>PangoGuessr</h1>
+          <Wordmark />
           <p className="brand__tag">Guess where you are. Closest wins.</p>
         </div>
       </header>

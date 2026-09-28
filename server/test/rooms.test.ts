@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { CLOSE_REPLACED, EMPTY_ROOM_TTL_MS, HOST_GRACE_MS, rankByScore } from '@pangoguessr/shared';
 import type { ServerMessage } from '@pangoguessr/shared';
+import type { LocationSource } from '../src/locationSource';
 import { RoomStore, connectedCount, type Conn } from '../src/rooms';
 
 class FakeConn implements Conn {
@@ -57,6 +58,50 @@ test('each player holds their own colour, kept across a reconnect and freed when
     [0, 2, 1],
     'and every phone is told the same colours',
   );
+});
+
+test('a phone is ready once it has the first panorama, until a rejoin or a new deck', () => {
+  // Every deal distinct, so a fresh deck is sure to start somewhere new.
+  let dealt = 0;
+  const source: LocationSource = {
+    take: (count) =>
+      Array.from({ length: count }, () => {
+        const n = dealt++;
+        return { id: `l${n}`, name: `Place ${n}`, at: { lat: 0, lng: 0 }, panoId: `pano-${n}` };
+      }),
+    stats: () => ({ source: 'test' }),
+  };
+  const store = new RoomStore(undefined, source);
+  const { conn: hostConn, room } = roomWithHost(store);
+  const a = new FakeConn();
+  assert.ok(store.join(a, room.code, 'A', 'session-a').ok);
+  const first = room.deck[0]!.panoId;
+
+  const ready = () => {
+    store.broadcastState(room);
+    const state = hostConn.lastOfType('roomState');
+    assert.ok(state && state.type === 'roomState');
+    return state.players.map((p) => p.ready);
+  };
+  assert.deepEqual(ready(), [false, false], 'nobody has loaded anything yet');
+
+  assert.equal(store.markPreloaded(a, room.deck[1]!.panoId), undefined, 'a later round is not it');
+  assert.equal(store.markPreloaded(a, 'made-up'), undefined, 'nor is anything outside the deck');
+  assert.equal(store.markPreloaded(a, first), room, 'the first round is, and wants a broadcast');
+  assert.equal(store.markPreloaded(a, first), undefined, 'saying it twice changes nothing');
+  assert.deepEqual(ready(), [false, true]);
+
+  store.disconnect(a);
+  const back = new FakeConn();
+  assert.ok(store.join(back, room.code, 'A', 'session-a').ok);
+  assert.deepEqual(ready(), [false, false], 'a rejoin may be a reload that lost it, so it must say again');
+  assert.equal(store.markPreloaded(back, first), room);
+
+  // A cancelled game deals a fresh deck, which nobody has loaded yet.
+  assert.ok(store.startRound(hostConn).ok);
+  assert.ok(store.cancelGame(hostConn).ok);
+  assert.notEqual(room.deck[0]!.panoId, first);
+  assert.deepEqual(ready(), [false, false], 'a new deck unreadies everyone');
 });
 
 test('a reconnect with a known sessionId restores the same slot and score', () => {

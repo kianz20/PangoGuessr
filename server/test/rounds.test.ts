@@ -692,6 +692,45 @@ test('the podium arrives with its phase, so nobody waits on a resync to see it',
   assert.equal(state?.type === 'roomState' && state.phase, 'GAME_OVER');
 });
 
+test('the podium carries the whole game, round by round, and a new game starts it afresh', () => {
+  const { store, room, clock, host, guests } = setup(['A']);
+  store.startRound(host.conn);
+  for (let round = 0; round < ROUNDS_PER_GAME; round++) {
+    store.submitGuess(host.conn, round, round, 1_000);
+    // A skipped round is still part of the story: it's listed, with no guess. Time runs out.
+    if (round !== 2) store.submitGuess(guests[0]!.conn, -round, -round, 2_000);
+    else clock.fireAll();
+    store.advance(host.conn);
+  }
+
+  const over = guests[0]!.conn.lastOfType('gameEnd');
+  assert.ok(over);
+  assert.equal(over.rounds.length, ROUNDS_PER_GAME, 'every round, not just the last');
+  assert.deepEqual(
+    over.rounds.map((r) => r.roundIndex),
+    [0, 1, 2, 3, 4],
+    'oldest first',
+  );
+  for (const [i, summary] of over.rounds.entries()) {
+    assert.equal(summary.actual, room.deck[i]!.at, 'with the answer it was scored against');
+    assert.equal(summary.locationName, room.deck[i]!.name);
+    assert.equal(summary.results.length, 2);
+  }
+  const skipped = over.rounds[2]!.results.find((r) => r.playerId === guests[0]!.player.id);
+  assert.equal(skipped?.guess, null);
+  assert.equal(skipped?.points, 0);
+
+  // The recap adds up to the final board.
+  const hostTotal = over.rounds
+    .flatMap((r) => r.results)
+    .filter((r) => r.playerId === host.player.id)
+    .reduce((sum, r) => sum + r.points, 0);
+  assert.equal(over.leaderboard.find((row) => row.playerId === host.player.id)?.score, hostTotal);
+
+  assert.ok(store.advance(host.conn).ok, 'Play again');
+  assert.deepEqual(room.history, [], 'last game’s rounds are not carried into the next');
+});
+
 test('scoring is distance alone, decaying with distance', () => {
   assert.equal(scoreGuess(0), 5000, 'a perfect guess scores full marks');
   assert.ok(scoreGuess(1000) > 2000, 'the right region still banks a solid score');

@@ -27,6 +27,7 @@ import type {
   PublicPlayer,
   RoomClosedReason,
   RoundSnapshot,
+  RoundSummary,
   ServerMessage,
 } from '@pangoguessr/shared';
 import {
@@ -66,6 +67,11 @@ export type Player = {
   score: number;
   /** Palette slot, unique among the room's current players and kept across reconnects. */
   color: number;
+  /**
+   * The first round's panorama, once this phone has said it's loaded — the lobby's ready tick.
+   * Checked against the deck, so a new deal leaves everyone unready without clearing it here.
+   */
+  preloaded: string | null;
 };
 
 export type Guess = {
@@ -111,6 +117,8 @@ export type Room = {
   /** A deal is waiting on the pool to refill. */
   dealing: boolean;
   round: ActiveRound | null;
+  /** This game's finished rounds, for the podium's recap. Cleared when a game starts or ends. */
+  history: RoundSummary[];
   /** Kept so a player reconnecting into ROUND_RESULTS or GAME_OVER sees the screen (§4). */
   lastMessage: ServerMessage | null;
 };
@@ -185,6 +193,7 @@ export class RoomStore {
       deck: [],
       dealing: false,
       round: null,
+      history: [],
       lastMessage: null,
     };
     this.rooms.set(room.code, room);
@@ -223,6 +232,9 @@ export class RoomStore {
       existing.conn = conn;
       existing.disconnectedAt = null;
       existing.graceUntil = null;
+      // The page may have reloaded and lost its preloaded panorama. A phone that still has it
+      // says so again as soon as it sees itself unready.
+      existing.preloaded = null;
       this.connIndex.set(conn, { code: room.code, playerId: existing.id });
       this.touch(room, now);
       return { ok: true, room, player: existing };
@@ -310,6 +322,7 @@ export class RoomStore {
     }
 
     for (const p of room.players.values()) p.score = 0;
+    room.history = [];
     this.beginRound(room, 0, now);
     return { ok: true, room, player };
   }
@@ -375,7 +388,11 @@ export class RoomStore {
       if (nextIndex >= ROUNDS_PER_GAME) {
         room.phase = 'GAME_OVER';
         room.round = null;
-        const message: ServerMessage = { type: 'gameEnd', leaderboard: this.leaderboard(room) };
+        const message: ServerMessage = {
+          type: 'gameEnd',
+          leaderboard: this.leaderboard(room),
+          rounds: room.history,
+        };
         room.lastMessage = message;
         this.broadcast(room, message);
         // Without the phase change, every phone sat on the results phase with no results to
@@ -394,6 +411,7 @@ export class RoomStore {
       room.roundIndex = 0;
       room.deck = [];
       room.round = null;
+      room.history = [];
       room.lastMessage = null;
       for (const p of room.players.values()) p.score = 0;
       this.dealDeck(room);
@@ -428,6 +446,7 @@ export class RoomStore {
     // of them seen, so replaying them would hand the room answers it already knows.
     room.deck = [];
     room.round = null;
+    room.history = [];
     room.lastMessage = null;
     for (const p of room.players.values()) p.score = 0;
     this.dealDeck(room);
@@ -435,6 +454,21 @@ export class RoomStore {
     this.touch(room, now);
     this.broadcastState(room, now);
     return { ok: true, room, player };
+  }
+
+  /**
+   * A phone saying it has the game's first panorama loaded, for the lobby's ready ticks (§7).
+   * Anything but the first round's panorama is ignored, so nothing a client sends is stored.
+   * Returns the room when this changed what everyone sees, so the caller knows to broadcast.
+   */
+  markPreloaded(conn: Conn, panoId: unknown): Room | undefined {
+    const located = this.locate(conn);
+    if (!located) return undefined;
+    const { room, player } = located;
+    const first = room.deck[0]?.panoId;
+    if (first === undefined || panoId !== first || player.preloaded === first) return undefined;
+    player.preloaded = first;
+    return room;
   }
 
   /**
@@ -599,6 +633,12 @@ export class RoomStore {
     });
 
     results.sort((a, b) => b.points - a.points);
+    room.history.push({
+      roundIndex: round.index,
+      locationName: round.location.name,
+      actual,
+      results,
+    });
 
     const message: ServerMessage = {
       type: 'roundEnd',
@@ -789,6 +829,7 @@ export class RoomStore {
       graceUntil: null,
       score: 0,
       color: freeColor(room),
+      preloaded: null,
     };
     room.players.set(player.id, player);
     room.bySession.set(sessionId, player.id);
@@ -817,7 +858,14 @@ export function publicPlayers(room: Room): PublicPlayer[] {
     connected: p.conn !== null,
     score: p.score,
     color: p.color,
+    ready: isReady(room, p),
   }));
+}
+
+/** Their phone has the first round's panorama. Against the current deck, so a new deal resets it. */
+function isReady(room: Room, player: Player): boolean {
+  const first = room.deck[0];
+  return first !== undefined && player.preloaded === first.panoId;
 }
 
 /**

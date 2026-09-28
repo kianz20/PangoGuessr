@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type { RoomStateMsg } from '@pangoguessr/shared';
 import { Admin } from './admin/Admin';
 import { ConnectionBanner } from './components/ConnectionBanner';
-import { preloadPanoramas } from './panoramas';
+import { FunFacts, WakeProgress } from './components/WaitingExtras';
+import { WAKING_AFTER_MS } from './connection';
+import { isPanoramaSettled, onPanoramaSettled, preloadPanoramas } from './panoramas';
 import { usePlayerColors } from './players';
 import { GameOver } from './screens/GameOver';
 import { Home } from './screens/Home';
@@ -32,7 +34,7 @@ function Game() {
     notice,
     round,
     results,
-    finalBoard,
+    final,
     rankDeltas,
     linkDownSince,
     createRoom,
@@ -43,6 +45,7 @@ function Game() {
     startRound,
     advance,
     cancelGame,
+    reportPreloaded,
     markRoundStarted,
     submitGuess,
   } = useRoom(handoff);
@@ -72,6 +75,16 @@ function Game() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [upcomingKey]);
 
+  // The lobby's ready tick: once round 1's panorama has loaded here, say so. Checked against
+  // what the room shows for us on every roomState, so a rejoin (which clears it) or a lost
+  // message is put right by itself.
+  const firstPano = room?.phase === 'LOBBY' ? room.panoIds[0] : undefined;
+  const firstSettled = usePanoramaSettled(firstPano);
+  useEffect(() => {
+    if (firstPano && firstSettled && me && !me.ready) reportPreloaded(firstPano);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [room, firstPano, firstSettled]);
+
   if (status === 'replaced') return <Replaced onPlayHere={resume} />;
 
   if (status !== 'home' && status !== 'inRoom') {
@@ -96,9 +109,9 @@ function Game() {
         onCancelGame={cancelGame}
       />
     );
-    const podiumScreen = finalBoard && (
+    const podiumScreen = final && (
       <GameOver
-        leaderboard={finalBoard}
+        final={final}
         youId={room.youId}
         isHost={isHost}
         colorOf={colorOf}
@@ -181,6 +194,12 @@ function Replaced({ onPlayHere }: { onPlayHere: () => void }) {
   );
 }
 
+function usePanoramaSettled(panoId: string | undefined): boolean {
+  return useSyncExternalStore(onPanoramaSettled, () =>
+    panoId === undefined ? false : isPanoramaSettled(panoId),
+  );
+}
+
 /** The live round's panorama and every one after it; a finished round's is let go. */
 function panoramasStillToPlay(room: RoomStateMsg): string[] {
   switch (room.phase) {
@@ -215,20 +234,34 @@ function Connecting({
 }) {
   // The cold start is handled in the UI rather than paid away (§9). Without an explicit
   // "waking up" state the first person to scan the QR sees a broken app.
+  if (status === 'waking') {
+    return (
+      <main className="screen screen--status screen--waking">
+        <h1 className="status__title">Waking the server up</h1>
+        <p className="status__body">It naps when nobody’s playing. Worth the wait — it’s free.</p>
+        <WakeProgress alreadyMs={WAKING_AFTER_MS} />
+        <FunFacts />
+        <button className="button button--ghost" type="button" onClick={onCancel}>
+          Cancel
+        </button>
+      </main>
+    );
+  }
+
   const copy =
-    status === 'waking'
-      ? { title: 'Waking the server up', body: 'This takes about 30 seconds. Worth it — it’s free.' }
-      : status === 'reconnecting'
-        ? { title: 'Reconnecting', body: 'Hold tight — your place and score are kept.' }
-        : status === 'waitingForGame'
-          ? { title: 'Game in progress', body: notice ?? 'You’ll join automatically when it ends.' }
-          : { title: 'Connecting', body: '' };
+    status === 'reconnecting'
+      ? { title: 'Reconnecting', body: 'Hold tight — your place and score are kept.' }
+      : status === 'waitingForGame'
+        ? { title: 'Game in progress', body: notice ?? 'You’ll join automatically when it ends.' }
+        : { title: 'Connecting', body: '' };
 
   return (
     <main className="screen screen--status">
       <div className="spinner" aria-hidden />
       <h1 className="status__title">{copy.title}</h1>
       {copy.body && <p className="status__body">{copy.body}</p>}
+      {/* A whole game can be a few minutes to wait out. */}
+      {status === 'waitingForGame' && <FunFacts />}
       <button className="button button--ghost" type="button" onClick={onCancel}>
         Cancel
       </button>

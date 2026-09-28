@@ -41,6 +41,8 @@ type Entry = {
    */
   startView: { pov: google.maps.StreetViewPov; zoom: number } | null;
   resetFrame: number;
+  /** Accepted, and given time for its tiles to arrive — or failed, with nothing left to wait for. */
+  settled: boolean;
   disposed: boolean;
 };
 
@@ -49,6 +51,8 @@ const entries = new Map<string, Entry>();
 let wanted: string[] = [];
 let pumping = false;
 let lot: HTMLDivElement | null = null;
+/** Told whenever a panorama settles, for the lobby's ready tick. */
+const settledListeners = new Set<() => void>();
 
 /** No event says a panorama's tiles have arrived, so give them a moment once it's accepted. */
 const TILE_SETTLE_MS = 2_000;
@@ -97,6 +101,21 @@ export function showPanorama(panoId: string, host: HTMLElement, handlers: Viewer
 }
 
 /**
+ * Whether `panoId` has loaded here — what the lobby's ready tick reports (§7). A placeholder
+ * token never loads anything, so it's always ready; a failed panorama counts too, since there's
+ * nothing left to wait for.
+ */
+export function isPanoramaSettled(panoId: string): boolean {
+  return panoId.startsWith('dev:') || entries.get(panoId)?.settled === true;
+}
+
+/** For useSyncExternalStore. */
+export function onPanoramaSettled(listener: () => void): () => void {
+  settledListeners.add(listener);
+  return () => settledListeners.delete(listener);
+}
+
+/**
  * One at a time, in round order, so the next round's panorama gets the whole connection
  * instead of sharing it with every round after it.
  */
@@ -118,10 +137,9 @@ function nextToLoad(): string | undefined {
 
 async function settled(entry: Entry): Promise<void> {
   const deadline = Date.now() + PRELOAD_TIMEOUT_MS;
-  while (entry.status === 'loading' && !entry.disposed && Date.now() < deadline) {
+  while (!entry.settled && !entry.disposed && Date.now() < deadline) {
     await sleep(250);
   }
-  if (!entry.disposed) await sleep(TILE_SETTLE_MS);
 }
 
 function open(panoId: string): Entry {
@@ -137,6 +155,7 @@ function open(panoId: string): Entry {
     heading: null,
     startView: null,
     resetFrame: 0,
+    settled: false,
     disposed: false,
   };
   entries.set(panoId, entry);
@@ -198,6 +217,16 @@ function setStatus(entry: Entry, status: PanoramaStatus): void {
   if (entry.disposed || entry.status === status || entry.status === 'error') return;
   entry.status = status;
   for (const viewer of entry.viewers) viewer.onStatus(status);
+
+  // Settled once its tiles have had their moment to arrive. An error has nothing to wait for.
+  window.setTimeout(
+    () => {
+      if (entry.disposed || entry.settled) return;
+      entry.settled = true;
+      for (const listener of settledListeners) listener();
+    },
+    status === 'ready' ? TILE_SETTLE_MS : 0,
+  );
 }
 
 function resetView(entry: Entry): void {
@@ -239,6 +268,7 @@ function dispose(panoId: string, entry: Entry): void {
   }
   entry.element.remove();
   entries.delete(panoId);
+  for (const listener of settledListeners) listener();
 }
 
 /** The viewer measures its container; moving it between containers needs a nudge. */

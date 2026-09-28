@@ -19,6 +19,11 @@ export type PublicPlayer = {
    * into a palette collides constantly at 20 players.
    */
   color: number;
+  /**
+   * Their phone has the game's first panorama loaded, so Start won't leave them looking at a
+   * spinner (§7). Only meaningful in the lobby; a new deck clears it for everyone.
+   */
+  ready: boolean;
 };
 
 /** How many have guessed — a count, never who or how well, so nothing is spoiled (§8). */
@@ -68,6 +73,14 @@ export type GuessResult = {
   distanceKm: number | null;
   points: number;
   elapsedMs: number | null;
+};
+
+/** One finished round, as the podium's recap shows it. */
+export type RoundSummary = {
+  roundIndex: number;
+  locationName: string;
+  actual: LatLng;
+  results: GuessResult[];
 };
 
 export type LeaderboardRow = {
@@ -127,6 +140,8 @@ export type ClientMessage =
    * scored against the round after the one it was made in.
    */
   | { type: 'submitGuess'; roundIndex: number; lat: number; lng: number; elapsedMs: number }
+  /** This phone has finished loading `panoId` — sent for the game's first round, from the lobby. */
+  | { type: 'preloaded'; panoId: string }
   /**
    * App-level heartbeat. Browsers never expose the protocol's ping frames to JavaScript, so
    * this is the only way a phone can find out its socket has silently died.
@@ -154,6 +169,7 @@ export type ServerMessage =
       leaderboard: LeaderboardRow[];
       isFinalRound: boolean;
     }
-  | { type: 'gameEnd'; leaderboard: LeaderboardRow[] }
+  /** `rounds` is the whole game, oldest first, for the recap and the end-of-game awards. */
+  | { type: 'gameEnd'; leaderboard: LeaderboardRow[]; rounds: RoundSummary[] }
   | { type: 'roomClosed'; reason: RoomClosedReason }
   | { type: 'error'; code: ErrorCode; message: string };
