@@ -188,10 +188,11 @@ async function mount(panoId: string, entry: Entry): Promise<void> {
     });
     entry.panorama = panorama;
 
-    // 'pano_changed' fires once the viewer has accepted the ID; tiles follow. This is the
-    // closest signal to "the player can see something".
-    panorama.addListener('pano_changed', () => setStatus(entry, 'ready'));
-    // A wrong or retired panorama ID would otherwise sit as a grey box.
+    // 'status_changed' is the viewer's answer about the ID: OK once it has the panorama, with
+    // tiles following — the closest signal to "the player can see something" — and anything
+    // else for a wrong or retired ID, which would otherwise sit as a grey box. Not
+    // 'pano_changed': the constructor sets the ID before a listener can be attached, and
+    // nothing sets it again, so it never fires and every viewer sat on "Loading".
     panorama.addListener('status_changed', () => {
       if (panorama.getStatus() !== StreetViewStatus.OK) {
         setStatus(entry, 'error');
@@ -199,6 +200,7 @@ async function mount(panoId: string, entry: Entry): Promise<void> {
       }
       // Parked viewers are inert, so nobody can have turned it yet: this is the start.
       entry.startView ??= { pov: panorama.getPov(), zoom: panorama.getZoom() };
+      setStatus(entry, 'ready');
     });
     panorama.addListener('pov_changed', () => {
       const heading = panorama.getPov().heading;
@@ -213,7 +215,7 @@ async function mount(panoId: string, entry: Entry): Promise<void> {
 }
 
 function setStatus(entry: Entry, status: PanoramaStatus): void {
-  // An error is final; a late 'pano_changed' mustn't paper over it.
+  // An error is final; a late 'status_changed' mustn't paper over it.
   if (entry.disposed || entry.status === status || entry.status === 'error') return;
   entry.status = status;
   for (const viewer of entry.viewers) viewer.onStatus(status);

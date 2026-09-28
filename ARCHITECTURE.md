@@ -277,8 +277,9 @@ panorama tiles simultaneously, this is most rounds, not an edge case.
 
 So timing is **client-measured**:
 
-- The client starts a local stopwatch on the Street View viewer's `pano_changed` /
-  first-tile-rendered event — not on message receipt.
+- The client starts a local stopwatch on the Street View viewer's `status_changed` (OK) /
+  first-tile-rendered event — not on message receipt. Not `pano_changed`: with the ID
+  passed to the constructor it never fires.
 - Each round opens with a ~1.3s "Round 3 of 5" card, and the stopwatch waits for it to go
   as well as for the panorama. It costs nobody looking time: it only delays the clock when
   the panorama was ready before the card finished, and then only by the card's remainder,
