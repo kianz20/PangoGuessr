@@ -49,7 +49,10 @@ body {
   gap: 20px;
   max-width: 460px;
   margin: 0 auto;
-  padding: max(24px, env(safe-area-inset-top)) 20px max(24px, env(safe-area-inset-bottom));
+  /* Tight at the sides on a phone, where every pixel of width is the panorama's; widened again
+     from 700px. The insets keep a landscape notch clear. */
+  padding: max(24px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
+    max(24px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
   min-height: 100dvh;
 }
 
@@ -1046,6 +1049,8 @@ body {
   .screen {
     max-width: 560px;
     gap: 24px;
+    padding-left: max(20px, env(safe-area-inset-left));
+    padding-right: max(20px, env(safe-area-inset-right));
   }
 
   .screen--results,
@@ -1443,6 +1448,14 @@ button {
 
 .pano[data-status='ready'] .pano__tools {
   display: flex;
+}
+
+/* Below the docked width the open map covers the view, so its tools would sit on the map. On a
+   desktop the map floats in the corner and the view stays usable, so they stay. */
+@media (max-width: 1023.98px) {
+  .stage--map-open .pano__tools {
+    visibility: hidden;
+  }
 }
 
 .compass,
