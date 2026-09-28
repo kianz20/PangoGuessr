@@ -27,6 +27,11 @@ panorama, the guess map, the timer, and the between-round leaderboard. There is 
 separate "host view" bundle — the room creator just gets extra controls (start round,
 kick, next round) gated by a `isHost` flag on their player record.
 
+**Sound is off by default on every phone.** Sixteen phones chiming the same reveal in one room is
+chaos, so each phone opts in with a toggle (in the lobby, and on the results and podium
+headers), and the lobby suggests one phone is plenty. Every cue is synthesised with WebAudio, so
+there are no audio files to fetch.
+
 ---
 
 ## 2. Repository layout
@@ -70,6 +75,7 @@ startRound      { }                                  // host only
 submitGuess     { roundIndex, lat, lng, elapsedMs }  // client-measured, server-clamped
 advance         { }                                  // host only — leaves round results
 cancelGame      { }                                  // host only — abandon, back to lobby
+preloaded       { panoId }                           // round 1's panorama has loaded here (§7)
 ping            { }                                  // app-level heartbeat
 ```
 
@@ -81,7 +87,7 @@ roundStart      { roundIndex, panoId, durationMs: 40000 }
 guessAck        { received: true, roundIndex }       // no score leaked yet; resent for duplicates
 guessProgress   { roundIndex, progress: { guessed, total } }  // to everyone, per new guess
 roundEnd        { actual: {lat,lng}, results[], leaderboard[], isFinalRound }
-gameEnd         { leaderboard[] }
+gameEnd         { leaderboard[], rounds[] }          // rounds: the whole game, for the recap
 roomClosed      { reason }                           // host left, or room reaped (§8)
 error           { code, message }
 pong            { }
@@ -97,6 +103,7 @@ sent to the client is visible in devtools, so the answer stays server-side until
 Each player in `roomState.players` carries a `color`: a palette slot the server hands out on
 join (the lowest one free) and keeps across reconnects, so a player is the same colour on
 every screen and every phone. Hashing IDs into a palette collides constantly at 20 players.
+They also carry `ready`, the lobby's tick for a phone that has round 1's panorama loaded (§7).
 
 Every phase change is a `roomState`, including the step onto the podium. The payload that
 draws a screen (`roundEnd`, `gameEnd`) arrives just before it, and the client draws whichever
@@ -206,6 +213,23 @@ by the number tied. The podium renders three fixed steps and places whoever hold
 - Fewer than three players → the unused steps render empty.
 
 So a step with nobody on it is a normal state, not a special case.
+
+The reveal takes about four seconds: 3rd, then 2nd, then a two-second pause (the empty top
+step glows, "And the winner is…") before 1st lands with confetti — a burst from the top step on
+every phone, and a full shower on the winner's own. Everything below the podium waits for it:
+
+- **Your own line** — "You finished 7th of 12" — so the screen isn't only about the top three,
+  with your total and best round.
+- **The rest of the standings.**
+- **Game awards**: best single round, biggest miss, and quickest (average guess time, over at
+  least half the rounds). Like the round awards, only accuracy is ever scored (§6).
+- **Your game, round by round**: one map with each round's answer and your guess, and a list
+  you can tap to fly the map to that round.
+
+The recap comes from the server, not from rounds the phone happened to see: `gameEnd` carries
+every round's `roundEnd` results (`rounds[]`, oldest first), kept on the room for the length of
+a game and cleared when the next one starts. So a reload or a reconnect onto the podium gets the
+whole recap too. It's ~15KB at 20 players.
 
 From here the room returns to `LOBBY` with scores reset, same code and players, so a group
 can immediately play again.
@@ -609,6 +633,13 @@ viewer is moved on screen already loaded and the player's clock (§5) starts imm
 - On a cold server the pool is empty when the first room is created. The deal waits for the
   refill and broadcasts the deck when it lands. If sampling fails, Start falls back to
   dealing on the spot and says "try again in a moment", as before.
+- **The lobby shows who's ready.** Once round 1's panorama has loaded (accepted, plus the
+  settle time below), a phone sends `preloaded { panoId }`, and each player in the lobby gets a
+  tick; the list's header reads "14 of 16 ready". The server keeps only a report of the deck's
+  first panorama, and checks it against the current deck, so a new deal unreadies everyone by
+  itself. A rejoin clears it too, since it may be a reload that lost the viewer; the phone
+  looks at its own `ready` in every `roomState` and says so again if it still has it. It's
+  advice for the host, not a gate — Start works either way.
 - If the host presses Start before the phones have finished, nothing breaks: a round whose
   viewer isn't built yet gets one straight away, and the queue skips it.
 - There's no event that says a panorama's tiles have arrived, so the queue gives each one a
@@ -757,6 +788,11 @@ cold start lands exactly when someone is trying to start a party.
 away — the join screen shows an explicit "waking the server up, ~30 seconds" state rather
 than a dead spinner or a timeout error. Without that, the first person to scan the QR
 sees a broken app and tells everyone it doesn't work.
+
+The wait is made to feel shorter rather than just stated: a progress bar (an estimate — it
+eases towards the end and never claims 100%, so a slow wake looks slow rather than stuck), the
+seconds so far, and a rotating card of Street View tips and geography facts. The same cards
+keep someone company while they wait out a game in progress.
 
 Worth knowing: the *host* creating the room absorbs the cold start, so by the time the QR
 is up and people are scanning, the service is usually already awake.
