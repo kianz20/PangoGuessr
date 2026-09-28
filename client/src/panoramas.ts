@@ -1,7 +1,22 @@
 /// <reference types="google.maps" />
 import { getConfig, loadStreetView } from './maps';
+import { easeOutCubic, prefersReducedMotion } from './motion';
 
 export type PanoramaStatus = 'loading' | 'ready' | 'error';
+
+/** What the round screen hears from the viewer it's showing. */
+export type ViewerHandlers = {
+  onStatus(status: PanoramaStatus): void;
+  /** Which way they're looking, in degrees from north — for the compass. */
+  onHeading?(heading: number): void;
+};
+
+export type Viewer = {
+  /** Parks the viewer again; it's destroyed only once the room moves past its round. */
+  release(): void;
+  /** Turns back to where the panorama started, after looking around. */
+  resetView(): void;
+};
 
 /**
  * Every Street View viewer this page holds, keyed by panorama ID — and the only place one is
@@ -18,7 +33,14 @@ type Entry = {
   element: HTMLDivElement;
   panorama: google.maps.StreetViewPanorama | null;
   status: PanoramaStatus;
-  listeners: Set<(status: PanoramaStatus) => void>;
+  viewers: Set<ViewerHandlers>;
+  heading: number | null;
+  /**
+   * The view it opened on. Kept here, not in the round screen, so a remount mid-round (a
+   * reconnect) doesn't mistake a view the player has panned for the start.
+   */
+  startView: { pov: google.maps.StreetViewPov; zoom: number } | null;
+  resetFrame: number;
   disposed: boolean;
 };
 
@@ -32,6 +54,8 @@ let lot: HTMLDivElement | null = null;
 const TILE_SETTLE_MS = 2_000;
 /** A panorama that never reports back mustn't hold up the rest of the queue. */
 const PRELOAD_TIMEOUT_MS = 15_000;
+/** Long enough to see which way you're being turned, short enough not to wait on. */
+const RESET_MS = 450;
 
 /**
  * Keeps viewers for exactly these panoramas: starts loading any that are missing and drops
@@ -48,27 +72,27 @@ export function preloadPanoramas(panoIds: readonly string[]): void {
 
 /**
  * Shows `panoId` inside `host` — the preloaded viewer if there is one, or one started now if
- * not (a reload mid-round, say). Returns a release function that parks it again.
+ * not (a reload mid-round, say).
  */
-export function showPanorama(
-  panoId: string,
-  host: HTMLElement,
-  onStatus: (status: PanoramaStatus) => void,
-): () => void {
+export function showPanorama(panoId: string, host: HTMLElement, handlers: ViewerHandlers): Viewer {
   const entry = entries.get(panoId) ?? open(panoId);
   host.appendChild(entry.element);
   resize(entry);
-  entry.listeners.add(onStatus);
-  onStatus(entry.status);
+  entry.viewers.add(handlers);
+  handlers.onStatus(entry.status);
+  if (entry.heading !== null) handlers.onHeading?.(entry.heading);
 
-  return () => {
-    entry.listeners.delete(onStatus);
-    // Parked, not destroyed: a remount reuses it instead of billing a second load. It's
-    // dropped by preloadPanoramas once the room moves past its round.
-    if (!entry.disposed) {
-      parkingLot().appendChild(entry.element);
-      resize(entry);
-    }
+  return {
+    release() {
+      entry.viewers.delete(handlers);
+      // Parked, not destroyed: a remount reuses it instead of billing a second load. It's
+      // dropped by preloadPanoramas once the room moves past its round.
+      if (!entry.disposed) {
+        parkingLot().appendChild(entry.element);
+        resize(entry);
+      }
+    },
+    resetView: () => resetView(entry),
   };
 }
 
@@ -109,7 +133,10 @@ function open(panoId: string): Entry {
     element,
     panorama: null,
     status: 'loading',
-    listeners: new Set(),
+    viewers: new Set(),
+    heading: null,
+    startView: null,
+    resetFrame: 0,
     disposed: false,
   };
   entries.set(panoId, entry);
@@ -122,6 +149,7 @@ async function mount(panoId: string, entry: Entry): Promise<void> {
     const { mapsBrowserKey } = await getConfig();
     if (!mapsBrowserKey) throw new Error('No browser key configured');
     const { StreetViewPanorama, StreetViewStatus } = await loadStreetView(mapsBrowserKey);
+    const { ControlPosition } = (await google.maps.importLibrary('core')) as google.maps.CoreLibrary;
     // The room moved past it while the library loaded: nothing built, nothing billed.
     if (entry.disposed) return;
 
@@ -136,6 +164,8 @@ async function mount(panoId: string, entry: Entry): Promise<void> {
       motionTrackingControl: false,
       showRoadLabels: false, // road names would give the country away
       zoomControl: true,
+      // Top right: the bottom right is where the corner map sits on a phone.
+      zoomControlOptions: { position: ControlPosition.RIGHT_TOP },
     });
     entry.panorama = panorama;
 
@@ -144,7 +174,17 @@ async function mount(panoId: string, entry: Entry): Promise<void> {
     panorama.addListener('pano_changed', () => setStatus(entry, 'ready'));
     // A wrong or retired panorama ID would otherwise sit as a grey box.
     panorama.addListener('status_changed', () => {
-      if (panorama.getStatus() !== StreetViewStatus.OK) setStatus(entry, 'error');
+      if (panorama.getStatus() !== StreetViewStatus.OK) {
+        setStatus(entry, 'error');
+        return;
+      }
+      // Parked viewers are inert, so nobody can have turned it yet: this is the start.
+      entry.startView ??= { pov: panorama.getPov(), zoom: panorama.getZoom() };
+    });
+    panorama.addListener('pov_changed', () => {
+      const heading = panorama.getPov().heading;
+      entry.heading = heading;
+      for (const viewer of entry.viewers) viewer.onHeading?.(heading);
     });
   } catch (err) {
     if (entry.disposed) return;
@@ -157,12 +197,41 @@ function setStatus(entry: Entry, status: PanoramaStatus): void {
   // An error is final; a late 'pano_changed' mustn't paper over it.
   if (entry.disposed || entry.status === status || entry.status === 'error') return;
   entry.status = status;
-  for (const listener of entry.listeners) listener(status);
+  for (const viewer of entry.viewers) viewer.onStatus(status);
+}
+
+function resetView(entry: Entry): void {
+  const panorama = entry.panorama;
+  const start = entry.startView;
+  if (!panorama || !start) return;
+  cancelAnimationFrame(entry.resetFrame);
+  if (prefersReducedMotion()) {
+    panorama.setPov(start.pov);
+    panorama.setZoom(start.zoom);
+    return;
+  }
+
+  const from = panorama.getPov();
+  const fromZoom = panorama.getZoom();
+  // The short way round: from 350° back to 10° is a 20° turn, not 340°.
+  const turn = ((((start.pov.heading - from.heading) % 360) + 540) % 360) - 180;
+  const began = performance.now();
+  const step = (now: number) => {
+    const t = easeOutCubic(Math.min(1, (now - began) / RESET_MS));
+    panorama.setPov({
+      heading: from.heading + turn * t,
+      pitch: from.pitch + (start.pov.pitch - from.pitch) * t,
+    });
+    panorama.setZoom(fromZoom + (start.zoom - fromZoom) * t);
+    if (t < 1) entry.resetFrame = requestAnimationFrame(step);
+  };
+  entry.resetFrame = requestAnimationFrame(step);
 }
 
 function dispose(panoId: string, entry: Entry): void {
   entry.disposed = true;
-  entry.listeners.clear();
+  entry.viewers.clear();
+  cancelAnimationFrame(entry.resetFrame);
   if (entry.panorama) {
     google.maps.event.clearInstanceListeners(entry.panorama);
     entry.panorama.setVisible(false);

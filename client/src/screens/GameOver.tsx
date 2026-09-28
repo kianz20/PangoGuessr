@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { LeaderboardRow } from '@pangoguessr/shared';
+import { Avatar } from '../components/Avatar';
+import type { ColorOf } from '../players';
 
 /** 3rd, then 2nd, then 1st — the payoff for the whole game should feel like an event (§4). */
 const REVEAL_STEP_MS = 900;
@@ -9,11 +11,13 @@ export function GameOver({
   leaderboard,
   youId,
   isHost,
+  colorOf,
   onPlayAgain,
 }: {
   leaderboard: LeaderboardRow[];
   youId: string;
   isHost: boolean;
+  colorOf: ColorOf;
   onPlayAgain: () => void;
 }) {
   const [revealed, setRevealed] = useState(0);
@@ -51,6 +55,12 @@ export function GameOver({
                     key={row.playerId}
                     className={`step__player${row.playerId === youId ? ' step__player--you' : ''}`}
                   >
+                    <Avatar
+                      name={row.name}
+                      color={colorOf(row.playerId)}
+                      size="lg"
+                      you={row.playerId === youId}
+                    />
                     <span className="step__name">{row.name}</span>
                     <span className="step__score">{row.score.toLocaleString()}</span>
                   </div>
@@ -69,6 +79,7 @@ export function GameOver({
           {rest.map((row) => (
             <li key={row.playerId} className={`row${row.playerId === youId ? ' row--you' : ''}`}>
               <span className="row__rank">{row.rank}</span>
+              <Avatar name={row.name} color={colorOf(row.playerId)} size="sm" />
               <span className="row__name">{row.name}</span>
               <span className="row__points">{row.score.toLocaleString()}</span>
             </li>

@@ -3,6 +3,7 @@ import type { RoomStateMsg } from '@pangoguessr/shared';
 import { Admin } from './admin/Admin';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { preloadPanoramas } from './panoramas';
+import { usePlayerColors } from './players';
 import { GameOver } from './screens/GameOver';
 import { Home } from './screens/Home';
 import { Lobby } from './screens/Lobby';
@@ -47,6 +48,7 @@ function Game() {
   } = useRoom(handoff);
 
   const notifiedRef = useRef(false);
+  const colorOf = usePlayerColors(room?.players);
 
   // Once our room exists, tell the hub what code it got so it can redirect the other players.
   useEffect(() => {
@@ -80,12 +82,38 @@ function Game() {
     const isHost = me?.isHost ?? false;
     let screen: ReactNode;
 
-    // The room's phase is authoritative; the payload for that phase may arrive a beat later,
-    // which is what the fallbacks below cover.
+    // Built once and used from either phase, so the phase catching up with the payload
+    // re-renders the same screen instead of restarting its reveal.
+    const resultsScreen = results && (
+      <Results
+        results={results}
+        youId={room.youId}
+        isHost={isHost}
+        totalRounds={room.totalRounds}
+        rankDeltas={rankDeltas}
+        colorOf={colorOf}
+        onAdvance={advance}
+        onCancelGame={cancelGame}
+      />
+    );
+    const podiumScreen = finalBoard && (
+      <GameOver
+        leaderboard={finalBoard}
+        youId={room.youId}
+        isHost={isHost}
+        colorOf={colorOf}
+        onPlayAgain={advance}
+      />
+    );
+
+    // The room's phase is authoritative, but the payload that draws the next screen arrives
+    // first — roundEnd before the ROUND_RESULTS state, gameEnd before GAME_OVER. Drawing
+    // whatever has arrived is what stops a spinner flashing up between the two.
     switch (room.phase) {
       case 'ROUND_ACTIVE':
         screen = round ? (
           <Round
+            key={round.index}
             round={round}
             totalRounds={room.totalRounds}
             isHost={isHost}
@@ -93,38 +121,19 @@ function Game() {
             onClockStart={markRoundStarted}
             onCancelGame={cancelGame}
           />
+        ) : results?.roundIndex === room.roundIndex ? (
+          resultsScreen
         ) : (
           <Waiting title="Loading the round" />
         );
         break;
 
       case 'ROUND_RESULTS':
-        screen = results ? (
-          <Results
-            results={results}
-            youId={room.youId}
-            isHost={isHost}
-            totalRounds={room.totalRounds}
-            rankDeltas={rankDeltas}
-            onAdvance={advance}
-            onCancelGame={cancelGame}
-          />
-        ) : (
-          <Waiting title="Scoring the round" />
-        );
+        screen = resultsScreen || podiumScreen || <Waiting title="Scoring the round" />;
         break;
 
       case 'GAME_OVER':
-        screen = finalBoard ? (
-          <GameOver
-            leaderboard={finalBoard}
-            youId={room.youId}
-            isHost={isHost}
-            onPlayAgain={advance}
-          />
-        ) : (
-          <Waiting title="Counting up" />
-        );
+        screen = podiumScreen || <Waiting title="Counting up" />;
         break;
 
       default:
@@ -132,6 +141,7 @@ function Game() {
           <Lobby
             room={room}
             me={me}
+            colorOf={colorOf}
             notice={notice}
             onLeave={leaveRoom}
             onKick={kick}

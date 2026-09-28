@@ -79,6 +79,7 @@ Server → Client:
 roomState       { code, players[], phase, roundIndex, totalRounds, panoIds[] }
 roundStart      { roundIndex, panoId, durationMs: 40000 }
 guessAck        { received: true, roundIndex }       // no score leaked yet; resent for duplicates
+guessProgress   { roundIndex, progress: { guessed, total } }  // to everyone, per new guess
 roundEnd        { actual: {lat,lng}, results[], leaderboard[], isFinalRound }
 gameEnd         { leaderboard[] }
 roomClosed      { reason }                           // host left, or room reaped (§8)
@@ -92,6 +93,14 @@ path** — and `create` and `join` end in the same place, a `roomState` broadcas
 `roundStart` never includes the answer coordinates — only the panorama ID. Anything
 sent to the client is visible in devtools, so the answer stays server-side until
 `roundEnd`.
+
+Each player in `roomState.players` carries a `color`: a palette slot the server hands out on
+join (the lowest one free) and keeps across reconnects, so a player is the same colour on
+every screen and every phone. Hashing IDs into a palette collides constantly at 20 players.
+
+Every phase change is a `roomState`, including the step onto the podium. The payload that
+draws a screen (`roundEnd`, `gameEnd`) arrives just before it, and the client draws whichever
+has arrived, so no spinner flashes up in between.
 
 `roomState.panoIds` is the whole game's panoramas in round order, sent from the lobby
 onwards so every phone can preload them (§7). Same rule: IDs only. That's the same exposure
@@ -246,6 +255,10 @@ So timing is **client-measured**:
 
 - The client starts a local stopwatch on the Street View viewer's `pano_changed` /
   first-tile-rendered event — not on message receipt.
+- Each round opens with a ~1.3s "Round 3 of 5" card, and the stopwatch waits for it to go
+  as well as for the panorama. It costs nobody looking time: it only delays the clock when
+  the panorama was ready before the card finished, and then only by the card's remainder,
+  which comes out of the 6s load headroom.
 - `submitGuess` carries `{ roundIndex, lat, lng, elapsedMs }`.
 - The server **clamps `elapsedMs` to 0–40000** and records it alongside the guess.
 
@@ -646,8 +659,9 @@ Movement, separately, really wants 90+ second rounds to be worth having.
 ### Guess map (independent of the above)
 
 **Leaflet + OpenStreetMap tiles.** Free, and no reason to pay Google on both halves of
-the screen. Phone-sized: the map should be a tap-to-expand overlay, not a permanent
-split view.
+the screen. On a phone it sits small in the corner of the panorama and a tap opens it over
+the whole stage; placing a pin only happens on the open map, never on one too small to aim
+at. After Confirm it drops back to the corner, read-only, still showing the pin.
 
 ---
 
@@ -709,8 +723,9 @@ generation anyway.
 Small enough that the architecture doesn't change, but three things need attention:
 
 - **Broadcast fan-out.** Every guess touches 20 sockets. Don't broadcast per-guess score
-  updates — send only `guessAck` (a boolean) during the round, and one `roundEnd` payload
-  with all results. Live score leakage would also spoil the round.
+  updates — during the round send `guessAck` to the guesser and one small `guessProgress`
+  count ("5 of 8 guessed") to the room, and one `roundEnd` payload with all results. The
+  count says nothing about who guessed or how well; live scores would spoil the round.
 - **Leaderboard on a phone screen.** 20 rows doesn't fit. Between rounds, show the
   player's own rank and delta prominently with the top 3, and make the full table a
   scroll/expand. Only the final results screen needs all 20 at once.

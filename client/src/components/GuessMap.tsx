@@ -26,16 +26,25 @@ export function GuessMap({
   pin,
   onPin,
   disabled = false,
+  compact = false,
 }: {
   pin: LatLng | null;
   onPin: (at: LatLng) => void;
   disabled?: boolean;
+  /** Shown as the small corner map, which keeps the pin in the middle of what little it shows. */
+  compact?: boolean;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const markerRef = useRef<L.Marker | null>(null);
-  /** Fit the world once, not on every resize — that would fight the player's panning. */
-  const fittedRef = useRef(false);
+  /**
+   * The map moves between the corner and the full stage, and each size frames the world
+   * differently. It's refitted on every resize until the player touches it — after that,
+   * refitting would fight their panning.
+   */
+  const interactedRef = useRef(false);
+  const compactRef = useRef(compact);
+  compactRef.current = compact;
   /** Where the marker is drawn, which may be on a repeated copy of the world. */
   const [displayPin, setDisplayPin] = useState<L.LatLng | null>(null);
   // Kept in a ref so the click handler never needs re-binding, which would otherwise
@@ -62,8 +71,15 @@ export function GuessMap({
       zoomDelta: 1,
     });
     // Wrapping tiles, so panning east past the dateline continues into Asia rather than
-    // running out of map.
-    L.tileLayer(OSM_URL, { attribution: OSM_ATTRIBUTION, noWrap: false }).addTo(map);
+    // running out of map. The whole world in the ~150px corner map is zoom −0.8, below the
+    // tile source's lowest level; without minNativeZoom the layer draws the zoom-0 tile unscaled
+    // and the corner shows only the mid-Atlantic.
+    L.tileLayer(OSM_URL, {
+      attribution: OSM_ATTRIBUTION,
+      noWrap: false,
+      minZoom: -3,
+      minNativeZoom: 0,
+    }).addTo(map);
     map.on('click', (event: L.LeafletMouseEvent) => {
       // Show the pin exactly where they clicked, but report a wrapped coordinate. With a
       // repeating world, clicking the second copy of New Zealand yields lng ~194; the
@@ -74,7 +90,15 @@ export function GuessMap({
     });
     mapRef.current = map;
 
+    const touched = () => {
+      interactedRef.current = true;
+    };
+    host.addEventListener('pointerdown', touched);
+    host.addEventListener('wheel', touched, { passive: true });
+
     return () => {
+      host.removeEventListener('pointerdown', touched);
+      host.removeEventListener('wheel', touched);
       map.remove();
       mapRef.current = null;
       markerRef.current = null;
@@ -96,9 +120,11 @@ export function GuessMap({
       // makes the map feel broken.
       const worldZoom = map.getBoundsZoom(WORLD);
       map.setMinZoom(worldZoom);
-      if (!fittedRef.current) {
+      const marker = markerRef.current;
+      if (!interactedRef.current && !marker) {
         map.fitBounds(WORLD, { animate: false });
-        fittedRef.current = true;
+      } else if (compactRef.current && marker) {
+        map.panTo(marker.getLatLng(), { animate: false });
       }
     });
     if (hostRef.current) observer.observe(hostRef.current);

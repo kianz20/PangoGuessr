@@ -249,21 +249,6 @@ body {
   cursor: pointer;
 }
 
-.dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex: none;
-}
-
-.dot--on {
-  background: var(--accent);
-}
-
-.dot--off {
-  background: var(--muted);
-}
-
 .badge {
   padding: 2px 8px;
   font-size: 0.7rem;
@@ -330,11 +315,6 @@ body {
   inset: 0;
 }
 
-/* The map sits over the panorama on a phone, and is simply absent until opened. */
-.stage:not(.stage--map-open) .stage__map {
-  display: none;
-}
-
 .stage__map {
   z-index: 1;
 }
@@ -381,7 +361,8 @@ body {
 .round__bar {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
+  align-items: center;
+  gap: 10px;
 }
 
 .round__count {
@@ -449,7 +430,7 @@ body {
   height: 100%;
   background: var(--accent);
   /* Matches the 200ms tick, so the bar glides instead of stepping. */
-  transition: width 200ms linear;
+  transition: width 200ms linear, background-color 300ms ease;
 }
 
 .pano {
@@ -464,6 +445,8 @@ body {
 .pano__viewer {
   position: absolute;
   inset: 0;
+  /* Its own stacking context, so nothing inside Google's viewer can sit over our controls. */
+  z-index: 0;
 }
 
 .pano__overlay {
@@ -548,6 +531,7 @@ body {
 }
 
 .pin-marker__body {
+  position: relative;
   display: block;
   width: 24px;
   height: 24px;
@@ -657,7 +641,7 @@ body {
 
 .row {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
   padding: 8px 10px;
   background: var(--surface);
@@ -1044,6 +1028,7 @@ body {
   .link-banner__spinner {
     animation-duration: 3s;
   }
+
 }
 
 /*
@@ -1202,4 +1187,576 @@ body {
 
 .attribution a {
   color: inherit;
+}
+
+/* ---------------------------------------------------------------------------------------
+ * Feel: touch feedback, focus, and the pieces added for the round and the reveal.
+ * ------------------------------------------------------------------------------------- */
+
+button {
+  /* Our own pressed states replace the grey flash mobile browsers draw on tap. */
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Keyboard focus on everything you can press, not just the text inputs. */
+:where(button, a, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.button {
+  transition:
+    transform 90ms ease,
+    filter 120ms ease,
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+/* A press you can feel. Without it a tap on a phone gave no sign it had landed. */
+.button:not(:disabled):active {
+  transform: scale(0.97);
+}
+
+.button--primary:not(:disabled):active {
+  filter: brightness(0.9);
+}
+
+.button--ghost:not(:disabled):active {
+  background: var(--surface-2);
+}
+
+.cancel-game:active,
+.player__kick:active,
+.link-banner__leave:active,
+.link-button:active,
+.pano__reset:active {
+  transform: scale(0.94);
+}
+
+/* Hover only where there is one — on a phone it sticks after a tap. */
+@media (hover: hover) {
+  .button--primary:not(:disabled):hover {
+    filter: brightness(1.07);
+  }
+
+  .button--ghost:not(:disabled):hover {
+    background: var(--surface);
+    border-color: color-mix(in srgb, var(--text) 28%, var(--line));
+  }
+}
+
+/* Home */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.brand__mark {
+  flex: none;
+  border-radius: 12px;
+}
+
+.invite {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.invite__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 18px 20px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+}
+
+.invite__label {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.link-button {
+  align-self: center;
+  padding: 8px;
+  font: inherit;
+  font-size: 0.9rem;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+/* Avatars: a player's initials on their colour, the same chip everywhere they appear. */
+.avatar {
+  --avatar: var(--muted);
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--avatar);
+  color: #0b1118;
+  font-size: 0.74rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.01em;
+}
+
+.avatar--sm {
+  width: 22px;
+  height: 22px;
+  font-size: 0.6rem;
+}
+
+.avatar--lg {
+  width: 44px;
+  height: 44px;
+  font-size: 0.95rem;
+}
+
+.avatar--you {
+  box-shadow:
+    0 0 0 2px var(--bg),
+    0 0 0 4px var(--warn);
+}
+
+/* Round header: the count, and how many have guessed under it. */
+.round__status {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.round__progress {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The last ten seconds: amber, then red for the last five, pulsing on every tick. */
+.round__clock {
+  transform-origin: right center;
+}
+
+.round__clock--urgent,
+.round__clock--critical {
+  animation: clock-pulse 450ms ease-out;
+}
+
+.round__clock--critical {
+  color: var(--danger);
+}
+
+.timer--urgent .timer__fill {
+  background: var(--warn);
+}
+
+.timer--critical .timer__fill {
+  background: var(--danger);
+}
+
+@keyframes clock-pulse {
+  from {
+    transform: scale(1.28);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+
+/* The corner map: always there, small, and one tap from open. */
+.stage__map--mini {
+  inset: auto 10px 10px auto;
+  width: min(44%, 220px);
+  height: auto;
+  aspect-ratio: 4 / 3;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 45%);
+}
+
+.stage__map--mini .map--guess {
+  height: 100%;
+  border-color: rgb(255 255 255 / 30%);
+  border-radius: 12px;
+}
+
+.stage__map--mini .leaflet-control-zoom {
+  display: none;
+}
+
+.stage__map--mini .leaflet-control-attribution {
+  font-size: 8px;
+}
+
+.stage__map-expand {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: inherit;
+  cursor: pointer;
+}
+
+/* An "expand" glyph, so the corner map reads as something to tap. */
+.stage__map-expand::after {
+  content: '';
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgb(15 23 32 / 75%)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23eef4fa' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7'/%3E%3C/svg%3E")
+    center / 14px no-repeat;
+}
+
+/* Panorama tools: a compass, and a way back to where the view started. */
+.pano__tools {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 2;
+  display: none;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pano[data-status='ready'] .pano__tools {
+  display: flex;
+}
+
+.compass,
+.pano__reset {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgb(15 23 32 / 72%);
+  border: 1px solid rgb(255 255 255 / 22%);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 35%);
+}
+
+.compass__dial {
+  display: block;
+  width: 36px;
+  height: 36px;
+}
+
+.compass__dial svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.compass__north {
+  fill: var(--danger);
+}
+
+.compass__south {
+  fill: var(--text);
+  opacity: 0.75;
+}
+
+.compass__n {
+  fill: var(--text);
+  font-size: 7px;
+  font-weight: 800;
+  text-anchor: middle;
+}
+
+.pano__reset {
+  padding: 0;
+  color: var(--text);
+  cursor: pointer;
+  transition: transform 90ms ease;
+}
+
+.pano__reset svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The title card at the start of each round. The player's clock waits for it (§5). */
+.round-intro {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at center, rgb(15 23 32 / 74%), rgb(15 23 32 / 94%));
+  animation: intro-fade 1300ms ease both;
+}
+
+.round-intro__label {
+  margin: 0;
+  font-size: 2.8rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  animation: intro-rise 1300ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.round-intro__of {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+@keyframes intro-fade {
+  0% {
+    opacity: 0;
+  }
+  12%,
+  78% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes intro-rise {
+  0% {
+    transform: translateY(10px) scale(0.92);
+  }
+  28% {
+    transform: none;
+  }
+  100% {
+    transform: scale(1.05);
+  }
+}
+
+/* Reveal map: initials pins that pop in, and an answer pin that drops. */
+.map-pin {
+  background: none;
+  border: 0;
+}
+
+.map-avatar {
+  --avatar: #8fb3d9;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: var(--avatar);
+  color: #0b1118;
+  border: 2px solid #fff;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 45%);
+  font: 800 10px/1 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  animation: pin-pop 320ms cubic-bezier(0.3, 1.6, 0.5, 1) both;
+}
+
+.map-avatar--you {
+  border: 3px solid var(--warn);
+  font-size: 12px;
+}
+
+.pin-marker--answer .pin-marker__body {
+  width: 28px;
+  height: 28px;
+  background: var(--accent);
+  border-color: #0f1720;
+}
+
+.pin-marker--answer .pin-marker__body::after {
+  inset: 8px;
+  background: #0f1720;
+}
+
+.pin-drop {
+  display: block;
+  transform-origin: 50% 100%;
+  animation: pin-drop 450ms cubic-bezier(0.3, 1.5, 0.5, 1) both;
+}
+
+@keyframes pin-pop {
+  from {
+    transform: scale(0);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes pin-drop {
+  from {
+    transform: translateY(-24px) scale(0.6);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+/* Results: the parts that wait for the map to finish its reveal. */
+.yours__rank {
+  opacity: 0;
+  transition: opacity 300ms ease;
+}
+
+.yours__rank.is-shown {
+  opacity: 1;
+}
+
+.awards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.award {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  padding: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  opacity: 0;
+  transform: translateY(6px);
+  transition:
+    opacity 300ms ease,
+    transform 300ms ease;
+  transition-delay: calc(var(--i, 0) * 90ms);
+}
+
+.awards.is-shown .award {
+  opacity: 1;
+  transform: none;
+}
+
+.award--you {
+  border-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, var(--surface));
+}
+
+.award__title {
+  color: var(--muted);
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.award__who {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.award__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.award__detail {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.board__list--staggered .row {
+  opacity: 0;
+  transform: translateY(4px);
+  transition:
+    opacity 260ms ease,
+    transform 260ms ease;
+  transition-delay: calc(var(--i, 0) * 45ms);
+}
+
+.board__list--staggered.is-shown .row {
+  opacity: 1;
+  transform: none;
+}
+
+/* Podium: avatar above each name. */
+.step__player {
+  align-items: center;
+  gap: 4px;
+}
+
+@media (min-width: 1024px) {
+  .stage__map--mini {
+    inset: auto 0 0 auto;
+    width: min(24%, 300px);
+    aspect-ratio: 16 / 9;
+    margin: 14px;
+    border-radius: var(--radius);
+  }
+}
+
+.row__main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.row__total {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.row--you .row__total {
+  color: color-mix(in srgb, var(--warn) 80%, var(--text));
+}
+
+/* Last in the file on purpose: it has to beat the rules above at equal specificity. */
+@media (prefers-reduced-motion: reduce) {
+  .round__clock--urgent,
+  .round__clock--critical,
+  .round-intro,
+  .round-intro__label,
+  .map-avatar,
+  .pin-drop {
+    animation: none;
+  }
+
+  .button,
+  .award,
+  .board__list--staggered .row,
+  .yours__rank,
+  .pano__reset {
+    transition: none;
+  }
 }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { LOAD_HEADROOM_MS } from '@pangoguessr/shared';
-import { showPanorama } from '../panoramas';
+import { showPanorama, type Viewer } from '../panoramas';
 
 /**
  * The panorama for the live round. The viewer itself comes from `panoramas.ts`, which built it
@@ -30,6 +30,9 @@ export function PanoramaView({
   onReady: () => void;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const viewerRef = useRef<Viewer | null>(null);
+  /** Rotated directly: `pov_changed` fires every frame of a drag, too often for React state. */
+  const dialRef = useRef<HTMLSpanElement | null>(null);
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
 
@@ -54,14 +57,22 @@ export function PanoramaView({
       return () => window.clearTimeout(fallback);
     }
 
-    const release = showPanorama(panoId, hostRef.current!, (next) => {
-      setStatus(next);
-      if (next !== 'loading') ready();
+    const viewer = showPanorama(panoId, hostRef.current!, {
+      onStatus(next) {
+        setStatus(next);
+        if (next !== 'loading') ready();
+      },
+      onHeading(heading) {
+        // The dial turns against the view, so its N keeps pointing north.
+        if (dialRef.current) dialRef.current.style.transform = `rotate(${-heading}deg)`;
+      },
     });
+    viewerRef.current = viewer;
 
     return () => {
       window.clearTimeout(fallback);
-      release();
+      viewerRef.current = null;
+      viewer.release();
     };
     // Keyed on the round alone — deliberately not on panoId, status or any timer state.
   }, [roundIndex]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -69,6 +80,31 @@ export function PanoramaView({
   return (
     <div className="pano" data-status={status}>
       <div ref={hostRef} className="pano__viewer" />
+
+      {/* Always rendered, shown only once the view is up, so the dial exists to rotate. */}
+      <div className="pano__tools">
+        <span className="compass" role="img" aria-label="Compass">
+          <span ref={dialRef} className="compass__dial">
+            <svg viewBox="0 0 40 40" aria-hidden>
+              <path d="M20 11 L24.5 20 L15.5 20 Z" className="compass__north" />
+              <path d="M20 31 L24.5 20 L15.5 20 Z" className="compass__south" />
+              <text x="20" y="9.5" className="compass__n">N</text>
+            </svg>
+          </span>
+        </span>
+        <button
+          className="pano__reset"
+          type="button"
+          onClick={() => viewerRef.current?.resetView()}
+          aria-label="Back to the starting view"
+          title="Back to the starting view"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden>
+            <path d="M4 12a8 8 0 1 0 2.4-5.7" />
+            <path d="M4 4v4.5h4.5" />
+          </svg>
+        </button>
+      </div>
 
       {status === 'placeholder' && (
         <div className="pano__overlay">

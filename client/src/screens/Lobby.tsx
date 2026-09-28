@@ -1,10 +1,13 @@
 import { MAX_PLAYERS } from '@pangoguessr/shared';
 import type { PublicPlayer, RoomStateMsg } from '@pangoguessr/shared';
+import { Avatar } from '../components/Avatar';
 import { QrCode } from '../components/QrCode';
+import type { ColorOf } from '../players';
 
 export function Lobby({
   room,
   me,
+  colorOf,
   onLeave,
   onKick,
   onStart,
@@ -12,6 +15,7 @@ export function Lobby({
 }: {
   room: RoomStateMsg;
   me: PublicPlayer | null;
+  colorOf: ColorOf;
   onLeave: () => void;
   onKick: (playerId: string) => void;
   onStart: () => void;
@@ -43,7 +47,8 @@ export function Lobby({
         <ul className="players__list">
           {room.players.map((player) => (
             <li key={player.id} className={player.connected ? 'player' : 'player player--away'}>
-              <span className={`dot ${player.connected ? 'dot--on' : 'dot--off'}`} aria-hidden />
+              {/* The same chip they'll wear on the reveal map, so people learn it here. */}
+              <Avatar name={player.name} color={colorOf(player.id)} you={player.id === room.youId} />
               <span className="player__name">
                 {player.name}
                 {player.id === room.youId && <span className="player__you"> (you)</span>}

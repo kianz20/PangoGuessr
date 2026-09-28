@@ -8,8 +8,9 @@ import L from 'leaflet';
 export const GUESS_PIN = L.divIcon({
   className: 'pin-marker',
   html: '<span class="pin-marker__body"></span>',
-  iconSize: [24, 34],
-  // Anchor at the tip, so the point sits exactly on the tapped coordinate.
-  iconAnchor: [12, 34],
-  tooltipAnchor: [0, -28],
+  iconSize: [24, 30],
+  // Anchor at the tip, so the point sits exactly on the tapped coordinate. The tip is the
+  // 24px square's corner turned to point down: 12 + 12√2 ≈ 29px from the top.
+  iconAnchor: [12, 29],
+  tooltipAnchor: [0, -24],
 });

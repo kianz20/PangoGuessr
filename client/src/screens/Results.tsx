@@ -1,6 +1,15 @@
+import { useMemo, useRef, type CSSProperties } from 'react';
+import { rankByScore } from '@pangoguessr/shared';
+import type { GuessResult, LeaderboardRow } from '@pangoguessr/shared';
+import { Avatar } from '../components/Avatar';
 import { CancelGame } from '../components/CancelGame';
-import { RevealMap } from '../components/RevealMap';
+import { RevealMap, revealSchedule } from '../components/RevealMap';
+import { useAfter, useCountUp, useFlip } from '../motion';
+import type { ColorOf } from '../players';
 import type { ResultsView } from '../useRoom';
+
+/** For someone with no pin on the map, whose points (0) have nothing to wait for. */
+const YOURS_WITHOUT_PIN_MS = 600;
 
 /** Distances read better rounded to something a human would say out loud. */
 function formatDistance(km: number): string {
@@ -27,12 +36,67 @@ function RankDelta({ value }: { value: number }) {
   );
 }
 
+type Award = {
+  id: 'closest' | 'lost' | 'quickest';
+  icon: string;
+  title: string;
+  playerId: string;
+  name: string;
+  detail: string;
+};
+
+/**
+ * Something for the room to cheer or jeer. Guess time finally gets a job here — it is recorded
+ * and shown, but never scored (§6), so "Quickest" is bragging rights and nothing more.
+ */
+function roundAwards(results: GuessResult[]): Award[] {
+  const guessed = results.filter(
+    (r): r is GuessResult & { distanceKm: number; elapsedMs: number } =>
+      r.distanceKm !== null && r.elapsedMs !== null,
+  );
+  // One guess isn't a contest.
+  if (guessed.length < 2) return [];
+
+  const byDistance = [...guessed].sort((a, b) => a.distanceKm - b.distanceKm);
+  const closest = byDistance[0]!;
+  const lost = byDistance[byDistance.length - 1]!;
+  const quickest = [...guessed].sort((a, b) => a.elapsedMs - b.elapsedMs)[0]!;
+
+  return [
+    {
+      id: 'closest',
+      icon: '🎯',
+      title: 'Closest',
+      playerId: closest.playerId,
+      name: closest.name,
+      detail: formatDistance(closest.distanceKm),
+    },
+    {
+      id: 'lost',
+      icon: '🧭',
+      title: 'Most lost',
+      playerId: lost.playerId,
+      name: lost.name,
+      detail: `${formatDistance(lost.distanceKm)} off`,
+    },
+    {
+      id: 'quickest',
+      icon: '⚡',
+      title: 'Quickest',
+      playerId: quickest.playerId,
+      name: quickest.name,
+      detail: `${(quickest.elapsedMs / 1000).toFixed(1)}s`,
+    },
+  ];
+}
+
 export function Results({
   results,
   youId,
   isHost,
   totalRounds,
   rankDeltas,
+  colorOf,
   onAdvance,
   onCancelGame,
 }: {
@@ -41,11 +105,25 @@ export function Results({
   isHost: boolean;
   totalRounds: number;
   rankDeltas: Record<string, number>;
+  colorOf: ColorOf;
   onAdvance: () => void;
   onCancelGame: () => void;
 }) {
   const you = results.results.find((r) => r.playerId === youId);
   const yourRank = results.leaderboard.find((r) => r.playerId === youId);
+  const awards = useMemo(() => roundAwards(results.results), [results]);
+
+  /**
+   * Everything below the map waits for it: your points count up as your pin lands, and the
+   * awards and the new standings appear once the last pin is in. Otherwise the boards would
+   * give away the ending the map is building up to.
+   */
+  const schedule = useMemo(() => revealSchedule(results.results), [results]);
+  const revealed = useAfter(schedule.doneAt);
+  const yourPoints = useCountUp(you?.points ?? 0, {
+    delayMs: schedule.landsAt.get(youId) ?? YOURS_WITHOUT_PIN_MS,
+    durationMs: 1_000,
+  });
 
   return (
     <main className="screen screen--results">
@@ -57,7 +135,12 @@ export function Results({
       </header>
 
       {/* The map is the dominant element, with the leaderboard scrolling beneath it (§4). */}
-      <RevealMap actual={results.actual} results={results.results} youId={youId} />
+      <RevealMap
+        actual={results.actual}
+        results={results.results}
+        youId={youId}
+        colorOf={colorOf}
+      />
 
       {you && (
         <section className="yours">
@@ -68,9 +151,9 @@ export function Results({
               <span className="yours__time"> in {Math.round(you.elapsedMs / 1000)}s</span>
             )}
           </span>
-          <span className="yours__points">+{you.points}</span>
+          <span className="yours__points">+{yourPoints.toLocaleString()}</span>
           {yourRank && (
-            <span className="yours__rank">
+            <span className={`yours__rank${revealed ? ' is-shown' : ''}`}>
               #{yourRank.rank}
               <RankDelta value={rankDeltas[youId] ?? 0} />
             </span>
@@ -78,20 +161,47 @@ export function Results({
         </section>
       )}
 
+      {awards.length > 0 && (
+        // Always laid out, only faded in, so nothing below jumps when it appears.
+        <ul className={`awards${revealed ? ' is-shown' : ''}`} aria-label="This round’s awards">
+          {awards.map((award, i) => (
+            <li
+              key={award.id}
+              className={`award${award.playerId === youId ? ' award--you' : ''}`}
+              style={{ '--i': i } as CSSProperties}
+            >
+              <span className="award__title">
+                <span aria-hidden>{award.icon}</span> {award.title}
+              </span>
+              <span className="award__who">
+                <Avatar name={award.name} color={colorOf(award.playerId)} size="sm" />
+                <span className="award__name">{award.name}</span>
+              </span>
+              <span className="award__detail">{award.detail}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
       {/* Side by side rather than stacked: 20 players is 40 rows in one column, which is
           three screens of scrolling on a phone before the host can reach "Next" (§8). */}
       <div className="boards">
         <section className="board">
           <h2 className="board__title">This round</h2>
-          <ul className="board__list">
-            {results.results.map((result) => (
+          <ul className={`board__list board__list--staggered${revealed ? ' is-shown' : ''}`}>
+            {results.results.map((result, i) => (
               <li
                 key={result.playerId}
                 className={`row${result.playerId === youId ? ' row--you' : ''}`}
+                style={{ '--i': i } as CSSProperties}
               >
-                <span className="row__name">{result.name}</span>
-                <span className="row__meta">
-                  {result.distanceKm === null ? '—' : formatDistance(result.distanceKm)}
+                <Avatar name={result.name} color={colorOf(result.playerId)} size="sm" />
+                {/* Stacked: half a phone's width can't fit a name beside the distance. */}
+                <span className="row__main">
+                  <span className="row__name">{result.name}</span>
+                  <span className="row__meta">
+                    {result.distanceKm === null ? 'No guess' : formatDistance(result.distanceKm)}
+                  </span>
                 </span>
                 <span className="row__points">+{result.points}</span>
               </li>
@@ -101,16 +211,14 @@ export function Results({
 
         <section className="board">
           <h2 className="board__title">Overall</h2>
-          <ul className="board__list">
-            {results.leaderboard.map((row) => (
-              <li key={row.playerId} className={`row${row.playerId === youId ? ' row--you' : ''}`}>
-                <span className="row__rank">{row.rank}</span>
-                <RankDelta value={rankDeltas[row.playerId] ?? 0} />
-                <span className="row__name">{row.name}</span>
-                <span className="row__points">{row.score.toLocaleString()}</span>
-              </li>
-            ))}
-          </ul>
+          <OverallBoard
+            leaderboard={results.leaderboard}
+            results={results.results}
+            youId={youId}
+            colorOf={colorOf}
+            rankDeltas={rankDeltas}
+            settled={revealed}
+          />
         </section>
       </div>
 
@@ -142,4 +250,67 @@ export function Results({
       </footer>
     </main>
   );
+}
+
+/**
+ * The standings as they were before this round, until the reveal finishes — then each row
+ * slides to its new place while its total counts up by what it just scored.
+ */
+function OverallBoard({
+  leaderboard,
+  results,
+  youId,
+  colorOf,
+  rankDeltas,
+  settled,
+}: {
+  leaderboard: LeaderboardRow[];
+  results: GuessResult[];
+  youId: string;
+  colorOf: ColorOf;
+  rankDeltas: Record<string, number>;
+  settled: boolean;
+}) {
+  const listRef = useRef<HTMLUListElement>(null);
+
+  // Worked out from this round's payload alone, so a reload onto this screen still animates.
+  const before = useMemo(() => {
+    const scored = new Map(results.map((r) => [r.playerId, r.points]));
+    const previous = leaderboard.map((row) => ({
+      ...row,
+      score: row.score - (scored.get(row.playerId) ?? 0),
+    }));
+    // The sort is stable, so equal totals keep today's order — after round 1, when everyone
+    // was level on 0, nothing moves at all.
+    return rankByScore(previous, (row) => row.score).map(({ rank, entry }) => ({ ...entry, rank }));
+  }, [leaderboard, results]);
+  const scoreBefore = useMemo(() => new Map(before.map((r) => [r.playerId, r.score])), [before]);
+
+  const rows = settled ? leaderboard : before;
+  useFlip(listRef, rows.map((row) => row.playerId).join(' '));
+
+  return (
+    <ul ref={listRef} className="board__list">
+      {rows.map((row) => (
+        <li
+          key={row.playerId}
+          data-flip-id={row.playerId}
+          className={`row${row.playerId === youId ? ' row--you' : ''}`}
+        >
+          <span className="row__rank">{row.rank}</span>
+          {settled && <RankDelta value={rankDeltas[row.playerId] ?? 0} />}
+          <Avatar name={row.name} color={colorOf(row.playerId)} size="sm" />
+          <span className="row__main">
+            <span className="row__name">{row.name}</span>
+            <Total from={scoreBefore.get(row.playerId) ?? 0} to={row.score} />
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function Total({ from, to }: { from: number; to: number }) {
+  const value = useCountUp(to, { from, durationMs: 900 });
+  return <span className="row__total">{value.toLocaleString()}</span>;
 }

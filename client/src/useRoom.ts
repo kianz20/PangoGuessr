@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { LOAD_HEADROOM_MS, ROUND_MS } from '@pangoguessr/shared';
 import type {
   ErrorCode,
+  GuessProgress,
   LatLng,
   LeaderboardRow,
   ReconnectDiag,
@@ -28,6 +29,8 @@ export type RoundView = {
    */
   startedAt: number | null;
   youGuessed: boolean;
+  /** "5 of 8 guessed" — a count only (§8). Null until the server has said. */
+  progress: GuessProgress | null;
 };
 
 export type ResultsView = Extract<ServerMessage, { type: 'roundEnd' }>;
@@ -218,7 +221,7 @@ export function useRoom(initialIntent: Intent | null = null) {
           // but take the room's deadline from the server rather than our old countdown (§4).
           setRound((prev) =>
             prev && prev.index === snapshot.index
-              ? { ...prev, roomDeadline, youGuessed }
+              ? { ...prev, roomDeadline, youGuessed, progress: snapshot.progress }
               : {
                   index: snapshot.index,
                   panoId: snapshot.panoId,
@@ -226,6 +229,7 @@ export function useRoom(initialIntent: Intent | null = null) {
                   roomDeadline,
                   startedAt: null,
                   youGuessed,
+                  progress: snapshot.progress,
                 },
           );
         }
@@ -251,7 +255,15 @@ export function useRoom(initialIntent: Intent | null = null) {
           roomDeadline: Date.now() + msg.durationMs + LOAD_HEADROOM_MS,
           startedAt: null,
           youGuessed: false,
+          progress: null,
         });
+        return;
+      }
+
+      if (msg.type === 'guessProgress') {
+        setRound((prev) =>
+          prev?.index === msg.roundIndex ? { ...prev, progress: msg.progress } : prev,
+        );
         return;
       }
 
