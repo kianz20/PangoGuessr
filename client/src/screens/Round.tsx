@@ -47,8 +47,8 @@ export function Round({
 }) {
   const [pin, setPin] = useState<LatLng | null>(null);
   /**
-   * The map is always on screen: small in the corner of the panorama, or open to place a pin.
-   * On a desktop there's room for it to start open.
+   * The map is hidden while they look at the view, and opened from the footer to place a pin.
+   * On a desktop there's room for it to start open, floating in the corner of the view.
    */
   const [mapOpen, setMapOpen] = useState(isDocked);
   const [remainingMs, setRemainingMs] = useState(round.durationMs);
@@ -86,8 +86,8 @@ export function Round({
     submittedRef.current = true;
     play('lock');
     onGuessRef.current(roundRef.current.index, at, elapsedMs);
-    // Back to the corner on a phone, so they can look at the view again while they wait —
-    // with their pin still showing.
+    // Back to the view on a phone, so they can look at it again while they wait. "Your pin"
+    // brings the map back.
     if (!isDocked()) setMapOpen(false);
   }, []);
 
@@ -197,19 +197,11 @@ export function Round({
           <PanoramaView panoId={round.panoId} roundIndex={round.index} onReady={handlePanoReady} />
         </div>
 
-        <div className={`stage__map${mapOpen ? '' : ' stage__map--mini'}`}>
+        {/* Hidden rather than unmounted while the view is up, so the map keeps its pin and
+            framing — and keeps its size, so opening it doesn't refit what they'd panned to. */}
+        <div className={`stage__map${mapOpen ? '' : ' stage__map--hidden'}`} aria-hidden={!mapOpen}>
           {/* Read-only once locked in: a record of what they picked, not an input. */}
-          <GuessMap pin={pin} onPin={setPin} disabled={guessed} compact={!mapOpen} />
-          {!mapOpen && (
-            // In the corner a tap opens the map rather than dropping a pin on a map too
-            // small to aim at.
-            <button
-              className="stage__map-expand"
-              type="button"
-              onClick={() => setMapOpen(true)}
-              aria-label={guessed ? 'Show your guess on the map' : 'Open the map to guess'}
-            />
-          )}
+          <GuessMap pin={pin} onPin={setPin} disabled={guessed} />
         </div>
       </div>
 
@@ -221,7 +213,7 @@ export function Round({
               <strong>Guess locked in.</strong> {waitingOn(progress)}
             </p>
             <button
-              className="button button--ghost actions__toggle"
+              className={`button button--ghost actions__toggle${mapOpen ? '' : ' actions__toggle--map'}`}
               type="button"
               onClick={() => setMapOpen((open) => !open)}
             >
@@ -231,7 +223,7 @@ export function Round({
         ) : (
           <>
             <button
-              className="button button--ghost actions__toggle"
+              className={`button button--ghost actions__toggle${mapOpen ? '' : ' actions__toggle--map'}`}
               type="button"
               onClick={() => setMapOpen((open) => !open)}
             >
