@@ -41,7 +41,11 @@ export type GuessProgress = {
 export type RoundSnapshot = {
   index: number;
   panoId: string;
-  /** Left on the room's backstop clock, not the player's own 40s. */
+  /**
+   * Until the room stops waiting on this player: the backstop, or sooner once their own clock
+   * has started (§5). Bounds the countdown, so a reload mid-round can't show more time than
+   * the room will give them.
+   */
   remainingMs: number;
   youGuessed: boolean;
   progress: GuessProgress;
@@ -63,6 +67,12 @@ export type RoomStateMsg = {
    */
   panoIds: string[];
   round?: RoundSnapshot;
+  /**
+   * Which state this is: the room counts every `roomState` it sends. The heartbeat's `pong`
+   * carries the room's latest, so a phone that missed one — for any reason — finds out within
+   * a beat and asks again, instead of sitting on a screen the room has left (§3).
+   */
+  rev: number;
 };
 
 export type GuessResult = {
@@ -140,13 +150,27 @@ export type ClientMessage =
    * scored against the round after the one it was made in.
    */
   | { type: 'submitGuess'; roundIndex: number; lat: number; lng: number; elapsedMs: number }
+  /**
+   * This player's own 40s have started (§5). The server keeps the first report, and from it
+   * knows when this phone has run out of time — so a phone that stops talking can't hold the
+   * round until the 46s backstop.
+   */
+  | { type: 'clockStarted'; roundIndex: number }
+  /** Their own clock ran out with no pin down: they're done, and the room needn't wait on them. */
+  | { type: 'timeUp'; roundIndex: number }
   /** This phone has finished loading `panoId` — sent for the game's first round, from the lobby. */
   | { type: 'preloaded'; panoId: string }
   /**
    * App-level heartbeat. Browsers never expose the protocol's ping frames to JavaScript, so
    * this is the only way a phone can find out its socket has silently died.
    */
-  | { type: 'ping' };
+  | { type: 'ping' }
+  /**
+   * "Send me the room as it is now." Sent when a `pong` shows this phone is behind. Answered
+   * with a `roomState` to this player alone (and the phase's payload, as on a rejoin), so a
+   * resync never disturbs anyone else.
+   */
+  | { type: 'sync' };
 
 export type ServerMessage =
   | RoomStateMsg
@@ -159,7 +183,11 @@ export type ServerMessage =
   | { type: 'guessAck'; received: true; roundIndex: number }
   /** Sent to the whole room on each new guess: one small count, not a score (§8). */
   | { type: 'guessProgress'; roundIndex: number; progress: GuessProgress }
-  | { type: 'pong' }
+  /**
+   * The room's latest `roomState.rev`, or null when this socket isn't the player's live
+   * connection to any room — the server has moved them to another socket, or lost them.
+   */
+  | { type: 'pong'; rev: number | null }
   | {
       type: 'roundEnd';
       roundIndex: number;

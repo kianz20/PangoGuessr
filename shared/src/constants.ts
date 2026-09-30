@@ -11,6 +11,13 @@ export const LOAD_HEADROOM_MS = 6_000;
 /** The room-owned backstop: 46s. One slow phone can't stall everyone else. */
 export const ROOM_BACKSTOP_MS = ROUND_MS + LOAD_HEADROOM_MS;
 
+/**
+ * How long past a player's own 40s the server still waits on them, counted from when it heard
+ * their clock start (§5). Covers the trip their last-second guess takes to arrive; past it,
+ * a phone that went quiet — screen locked, app switched — stops holding the round up.
+ */
+export const CLOCK_SLACK_MS = 1_500;
+
 export const MAX_PLAYERS = 20;
 
 export const MAX_NAME_LENGTH = 16;

@@ -35,6 +35,7 @@ export function Round({
   isHost,
   onGuess,
   onClockStart,
+  onTimeUp,
   onCancelGame,
 }: {
   round: RoundView;
@@ -43,6 +44,8 @@ export function Round({
   onGuess: (roundIndex: number, at: LatLng, elapsedMs: number) => void;
   /** The panorama is visible — this is what the 40s is measured from (§5). */
   onClockStart: (roundIndex: number) => void;
+  /** Their time ran out with no pin down, so the room needn't wait on them. */
+  onTimeUp: (roundIndex: number) => void;
   onCancelGame: () => void;
 }) {
   const [pin, setPin] = useState<LatLng | null>(null);
@@ -52,6 +55,8 @@ export function Round({
    */
   const [mapOpen, setMapOpen] = useState(isDocked);
   const [remainingMs, setRemainingMs] = useState(round.durationMs);
+  /** Out of time with nothing placed: the map locks, and the room stops waiting on them. */
+  const [timeUp, setTimeUp] = useState(false);
   /** Only for a round starting fresh. A reconnect mid-round goes straight back to it. */
   const [intro, setIntro] = useState(() => round.startedAt === null && !round.youGuessed);
 
@@ -68,6 +73,9 @@ export function Round({
   onGuessRef.current = onGuess;
   const onClockStartRef = useRef(onClockStart);
   onClockStartRef.current = onClockStart;
+  const onTimeUpRef = useRef(onTimeUp);
+  onTimeUpRef.current = onTimeUp;
+  const timeUpRef = useRef(false);
 
   // Set from the panorama's effect, which runs before this component's own — so these start
   // with their mount values and are never reset by an effect here.
@@ -119,11 +127,19 @@ export function Round({
       const left = Math.max(0, Math.min(ownRemaining, roomDeadline - now));
       setRemainingMs(left);
 
-      if (left === 0 && !submittedRef.current) {
+      if (left === 0 && !submittedRef.current && !timeUpRef.current) {
         // Time up with a pin placed but unconfirmed: submit it anyway rather than losing
-        // the round to a missed button press (§5). No pin at all scores 0.
+        // the round to a missed button press (§5).
         const at = pinRef.current;
-        if (at) submit(at, durationMs);
+        if (at) {
+          submit(at, durationMs);
+        } else {
+          // No pin at all scores 0. Saying so ends the round now if they were the last one,
+          // where the room used to sit at 0s until its backstop, several seconds later.
+          timeUpRef.current = true;
+          setTimeUp(true);
+          onTimeUpRef.current(roundRef.current.index);
+        }
       }
     }, 200);
     return () => window.clearInterval(tick);
@@ -132,7 +148,7 @@ export function Round({
   const confirm = () => {
     const at = pin;
     const startedAt = round.startedAt;
-    if (!at || startedAt === null) return;
+    if (!at || startedAt === null || timeUpRef.current) return;
     submit(at, Date.now() - startedAt);
   };
 
@@ -201,16 +217,16 @@ export function Round({
             framing — and keeps its size, so opening it doesn't refit what they'd panned to. */}
         <div className={`stage__map${mapOpen ? '' : ' stage__map--hidden'}`} aria-hidden={!mapOpen}>
           {/* Read-only once locked in: a record of what they picked, not an input. */}
-          <GuessMap pin={pin} onPin={setPin} disabled={guessed} />
+          <GuessMap pin={pin} onPin={setPin} disabled={guessed || timeUp} />
         </div>
       </div>
 
       {/* Always on screen, never scrolled away from. */}
       <footer className="actions">
-        {guessed ? (
+        {guessed || timeUp ? (
           <>
             <p className="actions__locked">
-              <strong>Guess locked in.</strong> {waitingOn(progress)}
+              <strong>{guessed ? 'Guess locked in.' : 'Time’s up.'}</strong> {waitingOn(progress)}
             </p>
             <button
               className={`button button--ghost actions__toggle${mapOpen ? '' : ' actions__toggle--map'}`}

@@ -77,12 +77,13 @@ advance         { }                                  // host only — leaves rou
 cancelGame      { }                                  // host only — abandon, back to lobby
 preloaded       { panoId }                           // round 1's panorama has loaded here (§7)
 ping            { }                                  // app-level heartbeat
+sync            { }                                  // resend me the room as it is now
 ```
 
 Server → Client:
 
 ```
-roomState       { code, players[], phase, roundIndex, totalRounds, panoIds[] }
+roomState       { code, players[], phase, roundIndex, totalRounds, panoIds[], rev }
 roundStart      { roundIndex, panoId, durationMs: 40000 }
 guessAck        { received: true, roundIndex }       // no score leaked yet; resent for duplicates
 guessProgress   { roundIndex, progress: { guessed, total } }  // to everyone, per new guess
@@ -90,7 +91,7 @@ roundEnd        { actual: {lat,lng}, results[], leaderboard[], isFinalRound }
 gameEnd         { leaderboard[], rounds[] }          // rounds: the whole game, for the recap
 roomClosed      { reason }                           // host left, or room reaped (§8)
 error           { code, message }
-pong            { }
+pong            { rev }                              // the room's latest roomState.rev, or null
 ```
 
 Room creation is a WS frame, not an HTTP endpoint, so there is **one transport and one code
@@ -123,7 +124,7 @@ lives in `client/src/connection.ts`, which knows nothing about the game.
 - **Both ends run a heartbeat.** The server pings every 4s and drops a socket it hasn't heard
   from in 10s (10–14s in practice, down from 15–30s): until then the room is still waiting on
   that phone. Browsers never expose protocol pings to JavaScript, so the client also sends an
-  app-level `ping` every 4s and gives up on a socket that doesn't answer within 6s. Without
+  app-level `ping` every 2s and gives up on a socket that doesn't answer within 6s. Without
   that, a socket that died silently — a tunnel, a dead WiFi — looks open until the OS gives
   up on it, which can take minutes, and the game just freezes.
 - **Reconnecting starts immediately**, then backs off with jitter (0.5s, 1s, 2s, then 4s). Once
@@ -135,6 +136,17 @@ lives in `client/src/connection.ts`, which knows nothing about the game.
   — panorama, pin, clock — is untouched, and a drop under a second shows nothing at all. It
   used to be replaced by a full-screen "Reconnecting", which unmounted the round and lost the
   pin.
+- **Every heartbeat checks the phone is in step.** Everything else is pushed, and nothing
+  resends a push that went missing — so one lost `roomState` used to leave a phone in the lobby
+  while the rest of the room played, until someone reloaded. The room counts the states it
+  sends (`roomState.rev`), and every `pong` carries the latest. A phone that's behind sends
+  `sync` and gets the current state (and the phase's payload) to itself alone. A `pong` with
+  `rev: null` means the room no longer sends to this socket at all, though it still answers,
+  and the phone rejoins over it. Either way it's caught within a beat (2s), whatever the cause.
+- **A late heartbeat is never forgiven by a network change.** Chrome reports a network change
+  whenever its bandwidth estimate moves, which on a bad connection is every few seconds. Each
+  one checks the socket, and each used to give the unanswered ping a fresh deadline, so a dead
+  socket could look alive indefinitely. Only coming back to a hidden or frozen page resets it.
 - **A guess is kept until it's acknowledged**, and resent after a reconnect. `roundIndex` is
   what makes that safe: the server drops a guess for any round but the live one, so a late
   resend can never be scored against the next round. It acknowledges duplicates too, so a
@@ -297,7 +309,8 @@ anyway.** Nobody loses a round to a missed button press. Two things fall out of 
 
 - The auto-submit races a last-instant Confirm tap, so the "ignore all but the first
   `submitGuess`" rule below is what keeps the guessed-count honest. It is not optional.
-- **No pin placed at all still scores 0.** Auto-submit needs something to submit.
+- **No pin placed at all still scores 0.** Auto-submit needs something to submit, so the
+  phone sends `timeUp { roundIndex }` instead, and the map locks behind "Time's up".
 
 The auto-submit fires at the player's local 40s, which lands before the 46s room backstop
 for anyone whose panorama loaded inside the 6s headroom — and is moot for anyone whose
@@ -333,8 +346,22 @@ On each `submitGuess`, the server checks whether all active players have now gue
 so it cancels the pending timeout and transitions to `ROUND_RESULTS` immediately.
 
 "Active" excludes **disconnected players** — a phone that dropped mid-round must not hold
-the room hostage for the full 46s. It also excludes players who already **timed out with
-no guess**. Getting this predicate wrong is the likeliest cause of a round that mysteriously
+the room hostage for the full 46s. It also excludes players who have **run out of their own
+40s** with no guess, which the server learns two ways:
+
+- **The phone says so** (`timeUp`), the moment its clock hits 0 with no pin down.
+- **The server's own copy of their clock.** Each phone sends `clockStarted { roundIndex }` when
+  its 40s begin, and the server stops waiting on that player 40s + 1.5s (`CLOCK_SLACK_MS`,
+  for a last-second guess to arrive) after hearing it. That covers a phone that goes quiet
+  mid-round without dropping its socket, like a locked screen or a switched app. The first
+  report stands, so a reload can't buy a fresh 40s, and the reloaded phone's countdown is
+  bounded by it.
+
+Before this, only a guess ended a player's part in the round. Anyone without a pin held the
+room until the 46s backstop, so every screen sat at 0s for up to ~5s: the player's own 40s
+start after the ~1.3s round card, and end ~4.7s before the backstop fires.
+
+Getting this predicate wrong is the likeliest cause of a round that mysteriously
 refuses to end, so it's worth a unit test: disconnect one of three players mid-round and
 assert the round closes when the remaining two have guessed.
 
@@ -352,7 +379,8 @@ means a venue WiFi hiccup that drops every phone at once no longer ends the roun
   receipt after a ~6s timeout, so a broken viewer doesn't mean an infinite stopwatch.
 - **Missing or absurd `elapsedMs`.** Treat as 40000 (worst case, still scored on
   accuracy) rather than rejecting the guess.
-- **No guess.** Score 0 for the round. Do not stall the room.
+- **No guess.** Score 0 for the round. Do not stall the room: `timeUp`, or the server's copy
+  of their clock, takes them off the count at their own 0s.
 - **Player disconnects mid-round.** Drop them from the "active" set once their grace runs
   out, so the early-end check can still be satisfied by everyone else.
 - **Last active player disconnects before guessing.** End the round when their grace runs

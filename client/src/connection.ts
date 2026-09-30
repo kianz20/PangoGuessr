@@ -31,8 +31,12 @@ const RETRY_STEPS_MS = [0, 500, 1_000, 2_000, 4_000];
  * The app-level heartbeat. Browsers hide the protocol's ping frames from JavaScript, so
  * without this a socket that died silently — a tunnel, a dead WiFi — looks open until the OS
  * gives up on it, which can take minutes. Worst case this notices in PING + PATIENCE.
+ *
+ * Each pong also carries the room's state number, so this is how long a phone can sit on a
+ * screen the room has left before it catches up (§3). The patience stays longer than the
+ * interval: a phone network answering slowly is not a dead socket.
  */
-const PING_EVERY_MS = 4_000;
+const PING_EVERY_MS = 2_000;
 const PONG_PATIENCE_MS = 6_000;
 /** Coming back to the page: the socket may have died while we were away, so check quickly. */
 const WAKE_PATIENCE_MS = 3_000;
@@ -108,9 +112,9 @@ export class Connection {
 
     document.addEventListener('visibilitychange', this.onVisibilityChange);
     window.addEventListener('pageshow', this.onPageShow);
-    window.addEventListener('online', this.wake);
+    window.addEventListener('online', this.onNetworkChange);
     window.addEventListener('offline', this.onOffline);
-    (navigator as WithNetworkInfo).connection?.addEventListener('change', this.wake);
+    (navigator as WithNetworkInfo).connection?.addEventListener('change', this.onNetworkChange);
     this.lastBeatAt = Date.now();
     this.heartbeat = window.setInterval(this.beat, 1_000);
 
@@ -125,9 +129,9 @@ export class Connection {
     window.clearInterval(this.heartbeat);
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     window.removeEventListener('pageshow', this.onPageShow);
-    window.removeEventListener('online', this.wake);
+    window.removeEventListener('online', this.onNetworkChange);
     window.removeEventListener('offline', this.onOffline);
-    (navigator as WithNetworkInfo).connection?.removeEventListener('change', this.wake);
+    (navigator as WithNetworkInfo).connection?.removeEventListener('change', this.onNetworkChange);
     this.pingDeadline = null;
 
     const socket = this.socket;
@@ -195,7 +199,9 @@ export class Connection {
       } catch {
         return;
       }
-      if (msg.type !== 'pong') this.events.onMessage(msg);
+      // Pongs too: each carries the room's latest state number, which is how `useRoom` notices
+      // a broadcast this socket never got.
+      this.events.onMessage(msg);
     };
 
     socket.onclose = (event) => {
@@ -242,8 +248,11 @@ export class Connection {
   /**
    * The page is back in front of the player, or the network changed under it: check now,
    * rather than waiting out a back-off step or the next heartbeat.
+   *
+   * `returning`: the page was hidden or frozen, so a heartbeat owed from before then proves
+   * nothing and gets a fresh deadline. A network change doesn't earn one.
    */
-  private wake = (): void => {
+  private wake = (returning: boolean): void => {
     if (!this.running) return;
     const socket = this.socket;
     if (!socket) {
@@ -251,7 +260,7 @@ export class Connection {
       return;
     }
     if (socket.readyState === WebSocket.OPEN) {
-      this.probe(WAKE_PATIENCE_MS);
+      this.probe(WAKE_PATIENCE_MS, returning);
       return;
     }
     // An attempt started before the page froze or the network changed is unlikely to land.
@@ -264,13 +273,16 @@ export class Connection {
   };
 
   private onVisibilityChange = (): void => {
-    if (document.visibilityState === 'visible') this.wake();
+    if (document.visibilityState === 'visible') this.wake(true);
   };
 
   /** Restored from the back/forward cache, where the socket will have been closed. */
   private onPageShow = (event: PageTransitionEvent): void => {
-    if (event.persisted) this.wake();
+    if (event.persisted) this.wake(true);
   };
+
+  /** Back online, or a WiFi-to-4G handoff: the socket may not have survived it. */
+  private onNetworkChange = (): void => this.wake(false);
 
   /** No network at all: the socket is certainly dead, so don't wait for it to say so. */
   private onOffline = (): void => {
@@ -288,7 +300,7 @@ export class Connection {
     // socket is checked the moment the page is visible again.
     if (document.hidden) return;
     if (asleep) {
-      this.probe(WAKE_PATIENCE_MS);
+      this.probe(WAKE_PATIENCE_MS, true);
       return;
     }
     if (this.pingDeadline !== null) {
@@ -298,11 +310,21 @@ export class Connection {
     if (now - this.lastPingAt >= PING_EVERY_MS) this.probe(PONG_PATIENCE_MS);
   };
 
-  /** Sends a heartbeat that must be answered — by anything — within `patienceMs`. */
-  private probe(patienceMs: number): void {
+  /**
+   * Sends a heartbeat that must be answered — by anything — within `patienceMs`.
+   *
+   * An answer already owed keeps its deadline, or brings it forward — never pushes it back.
+   * Every network change probes, and Chrome reports one each time its bandwidth estimate
+   * moves, which on a bad connection is every few seconds: resetting the deadline each time
+   * kept a dead socket looking alive indefinitely, and the game froze on whatever screen it
+   * was on. Only `fresh` — the page was hidden or frozen, so the old deadline passed while
+   * nothing could answer it — starts the clock again.
+   */
+  private probe(patienceMs: number, fresh = false): void {
     const now = Date.now();
-    // A fresh deadline, not the old one: one set before the page froze has long passed.
-    this.pingDeadline = now + patienceMs;
+    const deadline = now + patienceMs;
+    this.pingDeadline =
+      fresh || this.pingDeadline === null ? deadline : Math.min(this.pingDeadline, deadline);
     this.lastPingAt = now;
     this.send({ type: 'ping' });
   }

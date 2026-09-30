@@ -47,6 +47,7 @@ function Game() {
     cancelGame,
     reportPreloaded,
     markRoundStarted,
+    reportTimeUp,
     submitGuess,
   } = useRoom(handoff);
 
@@ -132,6 +133,7 @@ function Game() {
             isHost={isHost}
             onGuess={submitGuess}
             onClockStart={markRoundStarted}
+            onTimeUp={reportTimeUp}
             onCancelGame={cancelGame}
           />
         ) : results?.roundIndex === room.roundIndex ? (

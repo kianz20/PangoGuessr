@@ -744,3 +744,51 @@ test('scoring is distance alone, decaying with distance', () => {
     previous = value;
   }
 });
+
+test('a player out of time with no pin down ends the round at once, not at the backstop', () => {
+  const { store, room, host, guests } = setup(['A']);
+  assert.ok(store.startRound(host.conn).ok);
+  assert.ok(store.submitGuess(host.conn, 10, 10, 5_000).ok);
+  assert.equal(room.phase, 'ROUND_ACTIVE', 'still waiting on A');
+
+  store.timeUp(guests[0]!.conn, 0);
+  assert.equal(room.phase, 'ROUND_RESULTS', 'A can no longer guess, so nothing is left to wait for');
+  const results = host.conn.lastOfType('roundEnd')!.results;
+  assert.equal(results.find((r) => r.name === 'A')?.points, 0, 'and scores 0, like no guess at all');
+});
+
+test('running out of time takes a player off the count the round is waiting on', () => {
+  const { store, room, host, guests } = setup(['A', 'B']);
+  assert.ok(store.startRound(host.conn).ok);
+  store.timeUp(guests[0]!.conn, 0);
+  store.timeUp(guests[0]!.conn, 0);
+  assert.deepEqual(host.conn.lastOfType('guessProgress')!.progress, { guessed: 0, total: 2 });
+  store.timeUp(guests[1]!.conn, 1);
+  assert.equal(room.phase, 'ROUND_ACTIVE', 'a report for another round changes nothing');
+});
+
+test('a phone that goes quiet stops holding the round once its own clock has run out', () => {
+  const { store, room, clock, host, guests } = setup(['A']);
+  assert.ok(store.startRound(host.conn).ok);
+  const started = Date.now();
+  store.clockStarted(guests[0]!.conn, 0, started);
+  // A's screen locks: nothing more from it. The host guesses.
+  assert.ok(store.submitGuess(host.conn, 10, 10, 5_000, 0, started + 1_000).ok);
+  assert.equal(room.phase, 'ROUND_ACTIVE');
+
+  // The check armed for A's clock fires, well before the 46s backstop would.
+  assert.ok(clock.lastDelay! < 46_000);
+  clock.fireLatest();
+  assert.equal(room.phase, 'ROUND_RESULTS');
+});
+
+test('the first clock report stands, so a reload cannot buy a fresh 40 seconds', () => {
+  const { store, room, host, guests } = setup(['A']);
+  assert.ok(store.startRound(host.conn).ok);
+  const started = Date.now();
+  store.clockStarted(guests[0]!.conn, 0, started);
+  store.clockStarted(guests[0]!.conn, 0, started + 20_000);
+  store.broadcastState(room, started + 20_000);
+  const snapshot = guests[0]!.conn.lastOfType('roomState')!.round!;
+  assert.ok(snapshot.remainingMs <= ROUND_MS - 20_000 + 1_500, 'the countdown resumes where it was');
+});

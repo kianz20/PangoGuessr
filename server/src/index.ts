@@ -301,7 +301,13 @@ function logRejoin(code: string, name: string, diag: ReconnectDiag): void {
 function handleMessage(conn: Conn, msg: ClientMessage): void {
   switch (msg?.type) {
     case 'ping':
-      conn.send({ type: 'pong' });
+      // Carries the room's latest state number, so a phone that missed a broadcast — or whose
+      // socket the room no longer sends to — finds out within one beat (§3).
+      conn.send({ type: 'pong', rev: store.revFor(conn) });
+      return;
+
+    case 'sync':
+      store.sync(conn);
       return;
 
     case 'create': {
@@ -376,6 +382,14 @@ function handleMessage(conn: Conn, msg: ClientMessage): void {
       }
       return;
     }
+
+    case 'clockStarted':
+      store.clockStarted(conn, msg.roundIndex);
+      return;
+
+    case 'timeUp':
+      store.timeUp(conn, msg.roundIndex);
+      return;
 
     case 'preloaded': {
       const room = store.markPreloaded(conn, msg.panoId);

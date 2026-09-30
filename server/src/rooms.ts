@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  CLOCK_SLACK_MS,
   CLOSE_REPLACED,
   CODE_ALPHABET,
   CODE_LENGTH,
@@ -93,9 +94,19 @@ export type ActiveRound = {
   startedAt: number;
   /** Handle for the room's authoritative 46s backstop. */
   backstop: unknown;
-  /** Re-runs the early-end check when a dropped player's grace runs out. */
+  /**
+   * Re-runs the early-end check when the next thing it depends on runs out — a dropped
+   * player's grace, or a player's own clock.
+   */
   graceCheck: unknown;
   guesses: Map<string, Guess>;
+  /**
+   * When each player stops holding the round up: their own 40s from when we heard it start,
+   * plus the slack for their last guess to arrive (§5). Missing until their clock starts.
+   */
+  clockEnds: Map<string, number>;
+  /** Ran out of time with no pin down, by their own report. Scored 0, like no guess at all. */
+  timedOut: Set<string>;
 };
 
 export type Room = {
@@ -121,6 +132,8 @@ export type Room = {
   history: RoundSummary[];
   /** Kept so a player reconnecting into ROUND_RESULTS or GAME_OVER sees the screen (§4). */
   lastMessage: ServerMessage | null;
+  /** Counts the `roomState`s sent, so a phone can tell from a `pong` that it missed one (§3). */
+  rev: number;
 };
 
 /**
@@ -195,6 +208,7 @@ export class RoomStore {
       round: null,
       history: [],
       lastMessage: null,
+      rev: 0,
     };
     this.rooms.set(room.code, room);
 
@@ -375,6 +389,35 @@ export class RoomStore {
     return { ok: true, room, player };
   }
 
+  /**
+   * The player's own clock has started, so the server knows when they'll be out of time (§5).
+   * The first report stands: a reload mid-round must not buy them a fresh 40 seconds.
+   */
+  clockStarted(conn: Conn, roundIndex: unknown, now = Date.now()): void {
+    const located = this.locate(conn);
+    const round = located?.room.round;
+    if (!located || !round || round.index !== roundIndex) return;
+    if (round.clockEnds.has(located.player.id)) return;
+    round.clockEnds.set(located.player.id, now + ROUND_MS + CLOCK_SLACK_MS);
+    this.armGraceCheck(located.room, now);
+  }
+
+  /**
+   * Their clock ran out with no pin down. Without this the room kept waiting on them — their
+   * screen at 0s, everyone else's too — until the backstop, several seconds later.
+   */
+  timeUp(conn: Conn, roundIndex: unknown, now = Date.now()): void {
+    const located = this.locate(conn);
+    if (!located) return;
+    const { room, player } = located;
+    const round = room.round;
+    if (room.phase !== 'ROUND_ACTIVE' || !round || round.index !== roundIndex) return;
+    if (round.guesses.has(player.id) || round.timedOut.has(player.id)) return;
+    round.timedOut.add(player.id);
+    this.touch(room, now);
+    if (!this.maybeEndRound(room, now)) this.broadcastProgress(room, now);
+  }
+
   /** Host only. Leaves ROUND_RESULTS for the next round, or the podium for a new lobby. */
   advance(conn: Conn, now = Date.now()): Result {
     const located = this.locate(conn);
@@ -523,6 +566,8 @@ export class RoomStore {
       backstop: this.scheduler.schedule(() => this.endRound(room), ROOM_BACKSTOP_MS),
       graceCheck: null,
       guesses: new Map(),
+      clockEnds: new Map(),
+      timedOut: new Set(),
     };
 
     this.broadcast(room, {
@@ -537,10 +582,11 @@ export class RoomStore {
   }
 
   /**
-   * The round ends the moment every active player has guessed — the room does not sit on a
-   * dead timer (§5). "Active" excludes disconnected players, who must not be able to hold
-   * the room hostage for the full 46s — except for the few seconds of grace after a drop,
-   * so a phone that blinked doesn't come back to find the round closed on it.
+   * The round ends the moment nobody is left to wait on — the room does not sit on a dead
+   * timer (§5). A player stops being waited on once they've guessed or run out of their own
+   * time. Disconnected players aren't waited on either, so they can't hold the room hostage
+   * for the full 46s — except for the few seconds of grace after a drop, so a phone that
+   * blinked doesn't come back to find the round closed on it.
    *
    * Getting this predicate wrong is the likeliest cause of a round that mysteriously
    * refuses to end, which is why it's isolated here and unit tested.
@@ -548,13 +594,9 @@ export class RoomStore {
   maybeEndRound(room: Room, now = Date.now()): boolean {
     if (room.phase !== 'ROUND_ACTIVE' || !room.round) return false;
 
-    const active = [...room.players.values()].filter((p) => isStillPlaying(p, now));
-    // Everyone left mid-round: end it rather than waiting out the backstop on an empty room.
-    if (active.length === 0) {
-      this.endRound(room, now);
-      return true;
-    }
-    if (active.every((p) => room.round!.guesses.has(p.id))) {
+    const round = room.round;
+    // Everyone guessed, ran out of time, or left: end it rather than wait out the backstop.
+    if (![...room.players.values()].some((p) => isWaitingOn(round, p, now))) {
       this.endRound(room, now);
       return true;
     }
@@ -562,9 +604,9 @@ export class RoomStore {
   }
 
   /**
-   * Checks again when the next dropped player's grace runs out, since nothing else happens at
-   * that moment to prompt it. Only players the round is actually waiting on count — one who
-   * already guessed can't hold anything up.
+   * Checks again when the next dropped player's grace, or the next player's own clock, runs
+   * out, since nothing else happens at that moment to prompt it. Only players the round is
+   * actually waiting on count — one who already guessed can't hold anything up.
    */
   private armGraceCheck(room: Room, now: number): void {
     const round = room.round;
@@ -574,9 +616,10 @@ export class RoomStore {
 
     let due = Infinity;
     for (const p of room.players.values()) {
-      if (p.conn === null && p.graceUntil !== null && p.graceUntil > now && !round.guesses.has(p.id)) {
-        due = Math.min(due, p.graceUntil);
-      }
+      if (!isWaitingOn(round, p, now)) continue;
+      if (p.conn === null && p.graceUntil !== null) due = Math.min(due, p.graceUntil);
+      const clockEnd = round.clockEnds.get(p.id);
+      if (clockEnd !== undefined) due = Math.min(due, clockEnd);
     }
     if (due === Infinity) return;
 
@@ -586,7 +629,7 @@ export class RoomStore {
       // Never earlier than `due`, even when a test fires the timer without waiting for it.
       const at = Math.max(Date.now(), due);
       if (this.maybeEndRound(room, at)) return;
-      // Someone's grace ran out, so the room is waiting on one fewer.
+      // Someone's grace or time ran out, so the room is waiting on one fewer.
       this.broadcastProgress(room, at);
       this.armGraceCheck(room, at);
     }, due - now);
@@ -736,22 +779,57 @@ export class RoomStore {
   }
 
   broadcastState(room: Room, now = Date.now()): void {
+    room.rev++;
     const players = publicPlayers(room);
-    // Panorama IDs only. The rest of each RoundLocation is the answer (§3).
-    const panoIds = room.deck.map((location) => location.panoId);
     for (const player of room.players.values()) {
-      player.conn?.send({
-        type: 'roomState',
-        code: room.code,
-        players,
-        phase: room.phase,
-        roundIndex: room.roundIndex,
-        totalRounds: ROUNDS_PER_GAME,
-        youId: player.id,
-        panoIds,
-        ...(room.round ? { round: this.roundSnapshot(room, player, now) } : {}),
-      });
+      player.conn?.send(this.stateFor(room, player, players, now));
     }
+  }
+
+  /**
+   * A phone whose `pong` showed it was behind: the room as it is now, to that player alone,
+   * plus the phase's payload as on a rejoin. Nothing changes, so nobody else hears about it.
+   * Ignored from a socket that isn't the player's live one — the `pong` told that phone to
+   * rejoin instead.
+   */
+  sync(conn: Conn, now = Date.now()): boolean {
+    const located = this.locate(conn);
+    if (!located || located.player.conn !== conn) return false;
+    const { room, player } = located;
+    conn.send(this.stateFor(room, player, publicPlayers(room), now));
+    this.replayPhase(room, player);
+    return true;
+  }
+
+  /**
+   * What a `pong` reports: the room's latest `roomState.rev`, or null when this socket isn't
+   * the player's live connection — which a phone can't otherwise tell, since the socket
+   * itself still answers its heartbeat.
+   */
+  revFor(conn: Conn): number | null {
+    const located = this.locate(conn);
+    return located && located.player.conn === conn ? located.room.rev : null;
+  }
+
+  private stateFor(
+    room: Room,
+    player: Player,
+    players: PublicPlayer[],
+    now: number,
+  ): ServerMessage {
+    return {
+      type: 'roomState',
+      code: room.code,
+      players,
+      phase: room.phase,
+      roundIndex: room.roundIndex,
+      totalRounds: ROUNDS_PER_GAME,
+      youId: player.id,
+      // Panorama IDs only. The rest of each RoundLocation is the answer (§3).
+      panoIds: room.deck.map((location) => location.panoId),
+      ...(room.round ? { round: this.roundSnapshot(room, player, now) } : {}),
+      rev: room.rev,
+    };
   }
 
   private broadcast(room: Room, message: ServerMessage): void {
@@ -760,10 +838,12 @@ export class RoomStore {
 
   private roundSnapshot(room: Room, player: Player, now: number): RoundSnapshot {
     const round = room.round!;
+    const backstop = round.startedAt + ROOM_BACKSTOP_MS;
+    const until = Math.min(backstop, round.clockEnds.get(player.id) ?? backstop);
     return {
       index: round.index,
       panoId: round.panoId,
-      remainingMs: Math.max(0, ROOM_BACKSTOP_MS - (now - round.startedAt)),
+      remainingMs: Math.max(0, until - now),
       youGuessed: round.guesses.has(player.id),
       progress: this.progress(room, now),
     };
@@ -771,16 +851,17 @@ export class RoomStore {
 
   /**
    * "5 of 8 guessed". Counted against the same predicate the early-end check uses (§5), so
-   * the count reaching its total is exactly the moment the round closes.
+   * the count reaching its total is exactly the moment the round closes. Someone who ran out
+   * of time is no longer counted: the room isn't waiting on them.
    */
   private progress(room: Room, now: number): GuessProgress {
-    const guesses = room.round?.guesses;
+    const round = room.round;
     let guessed = 0;
     let total = 0;
     for (const p of room.players.values()) {
-      const hasGuessed = guesses?.has(p.id) ?? false;
+      const hasGuessed = round?.guesses.has(p.id) ?? false;
       if (hasGuessed) guessed++;
-      if (hasGuessed || isStillPlaying(p, now)) total++;
+      if (hasGuessed || (round && isWaitingOn(round, p, now))) total++;
     }
     return { guessed, total };
   }
@@ -888,6 +969,17 @@ export function connectedCount(room: Room): number {
 /** Connected, or dropped moments ago and very likely on their way back (§5). */
 function isStillPlaying(player: Player, now: number): boolean {
   return player.conn !== null || (player.graceUntil !== null && now < player.graceUntil);
+}
+
+/**
+ * Whether the round is still waiting on this player (§5): still playing, and with neither a
+ * guess in nor their own time used up — by their report, or by the clock we started for them.
+ */
+function isWaitingOn(round: ActiveRound, player: Player, now: number): boolean {
+  if (round.guesses.has(player.id) || round.timedOut.has(player.id)) return false;
+  const clockEnd = round.clockEnds.get(player.id);
+  if (clockEnd !== undefined && now >= clockEnd) return false;
+  return isStillPlaying(player, now);
 }
 
 function findHost(room: Room): Player | undefined {

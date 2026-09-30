@@ -61,6 +61,12 @@ const LOCKED_RETRY_MS = 3_000;
 type PendingGuess = { roundIndex: number; lat: number; lng: number; elapsedMs: number };
 
 /**
+ * What this phone has told the server about its own clock this round, resent with every
+ * reconnect: either could have been lost with the socket, and the server keeps the first.
+ */
+type ClockReport = { roundIndex: number; timeUp: boolean };
+
+/**
  * `initialIntent` is a hub hand-off (session.ts), which wins over rejoining the last room:
  * the hub has just put this player somewhere new.
  */
@@ -81,10 +87,21 @@ export function useRoom(initialIntent: Intent | null = null) {
   const [linkDownSince, setLinkDownSince] = useState<number | null>(null);
   /** Last round's ranks, kept client-side — the server has no reason to track history. */
   const previousRanksRef = useRef<Record<string, number> | null>(null);
+  /**
+   * The round whose `roundEnd` has been applied. A resync replays the payload, and applying it
+   * twice would compare the board with itself and wipe the rank chevrons.
+   */
+  const scoredRoundRef = useRef<number | null>(null);
+  /**
+   * The `rev` of the last `roomState` applied, checked against every `pong`. Null until the
+   * server has us in a room.
+   */
+  const revRef = useRef<number | null>(null);
 
   const intentRef = useRef<Intent | null>(null);
   const timersRef = useRef<number[]>([]);
   const pendingGuessRef = useRef<PendingGuess | null>(null);
+  const clockReportRef = useRef<ClockReport | null>(null);
 
   /** The latest render's handlers, so the connection never calls into a stale one. */
   const eventsRef = useRef<ConnectionEvents | null>(null);
@@ -128,6 +145,10 @@ export function useRoom(initialIntent: Intent | null = null) {
       clearTimers();
       intentRef.current = null;
       pendingGuessRef.current = null;
+      clockReportRef.current = null;
+      revRef.current = null;
+      scoredRoundRef.current = null;
+      previousRanksRef.current = null;
       forgetRoom();
       setRoom(null);
       setRound(null);
@@ -145,6 +166,8 @@ export function useRoom(initialIntent: Intent | null = null) {
       clearTimers();
       intentRef.current = intent;
       pendingGuessRef.current = null;
+      clockReportRef.current = null;
+      revRef.current = null;
       setNotice(null);
       setLinkDownSince(null);
       setStatus(reload ? 'reconnecting' : 'connecting');
@@ -192,9 +215,26 @@ export function useRoom(initialIntent: Intent | null = null) {
     },
 
     onMessage(msg) {
+      if (msg.type === 'pong') {
+        // Everything else here is pushed, and nothing re-sends a push that went missing. This
+        // is the check that catches it, whatever the cause: the server's count of room states
+        // against ours. Without it, one lost broadcast left a phone in the lobby while the
+        // rest of the room played, until someone thought to reload.
+        if (status !== 'inRoom' || revRef.current === null) return;
+        if (msg.rev === null) {
+          // The room no longer sends to this socket, though it still answers the heartbeat.
+          // Rejoining over it makes it the player's connection again.
+          sendJoin();
+        } else if (msg.rev !== revRef.current) {
+          connection.send({ type: 'sync' });
+        }
+        return;
+      }
+
       if (msg.type === 'roomState') {
         clearTimers();
         connection.joined();
+        revRef.current = msg.rev;
         setRoom(msg);
         setNotice(null);
         setLinkDownSince(null);
@@ -215,6 +255,12 @@ export function useRoom(initialIntent: Intent | null = null) {
           // Made while the socket was down, or lost with it. A duplicate is ignored and
           // acknowledged again, so resending is always safe.
           if (unacknowledged) connection.send({ type: 'submitGuess', ...unacknowledged });
+
+          const report = clockReportRef.current;
+          if (report?.roundIndex === snapshot.index) {
+            connection.send({ type: 'clockStarted', roundIndex: report.roundIndex });
+            if (report.timeUp) connection.send({ type: 'timeUp', roundIndex: report.roundIndex });
+          }
 
           const roomDeadline = Date.now() + snapshot.remainingMs;
           const youGuessed = snapshot.youGuessed || unacknowledged !== null;
@@ -240,6 +286,7 @@ export function useRoom(initialIntent: Intent | null = null) {
           setFinal(null);
           // A new game starts everyone level, so last game's movement is meaningless.
           previousRanksRef.current = null;
+          scoredRoundRef.current = null;
           setRankDeltas({});
         }
         return;
@@ -247,6 +294,7 @@ export function useRoom(initialIntent: Intent | null = null) {
 
       if (msg.type === 'roundStart') {
         if (pendingGuessRef.current?.roundIndex !== msg.roundIndex) pendingGuessRef.current = null;
+        if (clockReportRef.current?.roundIndex !== msg.roundIndex) clockReportRef.current = null;
         setResults(null);
         setFinal(null);
         setRound({
@@ -276,6 +324,13 @@ export function useRoom(initialIntent: Intent | null = null) {
 
       if (msg.type === 'roundEnd') {
         pendingGuessRef.current = null;
+        setRound(null);
+        // Replayed by a resync or a rejoin. What's on screen already came from it.
+        if (scoredRoundRef.current === msg.roundIndex) {
+          setResults((prev) => prev ?? msg);
+          return;
+        }
+        scoredRoundRef.current = msg.roundIndex;
         const previous = previousRanksRef.current;
         // Round 1 has nothing to compare against, so no chevrons appear at all.
         setRankDeltas(
@@ -292,12 +347,12 @@ export function useRoom(initialIntent: Intent | null = null) {
           msg.leaderboard.map((row) => [row.playerId, row.rank]),
         );
         setResults(msg);
-        setRound(null);
         return;
       }
 
       if (msg.type === 'gameEnd') {
-        setFinal(msg);
+        // Kept if it's a replay, so the podium doesn't restart its reveal.
+        setFinal((prev) => prev ?? msg);
         setResults(null);
         setRound(null);
         return;
@@ -364,9 +419,9 @@ export function useRoom(initialIntent: Intent | null = null) {
 
   /**
    * The phase is authoritative, but the payload that draws the screen arrives as a separate
-   * message — so anything that loses one message strands the UI on a spinner forever. Ask
-   * again until it turns up. `join` is idempotent for a known sessionId and replays the
-   * current phase, so no extra message type is needed.
+   * message — so a state that arrived without its payload strands the UI on a spinner. The
+   * heartbeat's `rev` can't see this (the state itself did arrive), so ask again until it
+   * turns up. `sync` replays the current phase's payload to this player alone.
    */
   const phase = room?.phase;
   const missingPayload =
@@ -374,9 +429,9 @@ export function useRoom(initialIntent: Intent | null = null) {
 
   useEffect(() => {
     if (!missingPayload) return;
-    const resync = window.setInterval(() => sendJoin(), 1_500);
+    const resync = window.setInterval(() => connection.send({ type: 'sync' }), 1_500);
     return () => window.clearInterval(resync);
-  }, [missingPayload, sendJoin]);
+  }, [missingPayload, connection]);
 
   const createRoom = useCallback((name: string) => start({ kind: 'create', name }), [start]);
   const joinRoom = useCallback(
@@ -408,14 +463,37 @@ export function useRoom(initialIntent: Intent | null = null) {
     [connection],
   );
 
-  /** Their panorama is visible, so their 40 seconds start now (§5) — once per round. */
-  const markRoundStarted = useCallback((index: number) => {
-    setRound((prev) =>
-      prev && prev.index === index && prev.startedAt === null
-        ? { ...prev, startedAt: Date.now() }
-        : prev,
-    );
-  }, []);
+  /**
+   * Their panorama is visible, so their 40 seconds start now (§5) — once per round. The server
+   * is told too, so it knows when they're out of time even if this phone goes quiet.
+   */
+  const markRoundStarted = useCallback(
+    (index: number) => {
+      setRound((prev) =>
+        prev && prev.index === index && prev.startedAt === null
+          ? { ...prev, startedAt: Date.now() }
+          : prev,
+      );
+      if (clockReportRef.current?.roundIndex === index) return;
+      clockReportRef.current = { roundIndex: index, timeUp: false };
+      connection.send({ type: 'clockStarted', roundIndex: index });
+    },
+    [connection],
+  );
+
+  /**
+   * Their clock ran out with no pin down. Said straight away, so the room doesn't sit at 0s
+   * waiting on someone who can no longer guess.
+   */
+  const reportTimeUp = useCallback(
+    (index: number) => {
+      const report = clockReportRef.current;
+      if (report?.roundIndex === index && report.timeUp) return;
+      clockReportRef.current = { roundIndex: index, timeUp: true };
+      connection.send({ type: 'timeUp', roundIndex: index });
+    },
+    [connection],
+  );
 
   const submitGuess = useCallback(
     (roundIndex: number, at: LatLng, elapsedMs: number) => {
@@ -453,6 +531,7 @@ export function useRoom(initialIntent: Intent | null = null) {
     cancelGame,
     reportPreloaded,
     markRoundStarted,
+    reportTimeUp,
     submitGuess,
     setNotice,
   };

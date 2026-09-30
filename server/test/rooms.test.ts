@@ -327,3 +327,43 @@ test('standard competition ranking: ties share a rank and the next rank skips', 
     ],
   );
 });
+
+test('a phone that missed a room state can tell from its heartbeat, and catch up alone', () => {
+  const store = new RoomStore();
+  const { conn: hostConn, room } = roomWithHost(store);
+  const guest = new FakeConn();
+  assert.ok(store.join(guest, room.code, 'Guest', 'session-guest').ok);
+  store.broadcastState(room);
+  const seen = guest.lastOfType('roomState');
+  assert.ok(seen && seen.type === 'roomState');
+  assert.equal(store.revFor(guest), seen.rev, 'in step: nothing to do');
+
+  // The game starts, but the guest's copy never arrives.
+  const lost = guest.sent.length;
+  assert.ok(store.startRound(hostConn).ok);
+  guest.sent.splice(lost);
+  assert.notEqual(store.revFor(guest), seen.rev, 'the heartbeat shows it is behind');
+
+  const hostHeard = hostConn.sent.length;
+  assert.ok(store.sync(guest));
+  const caught = guest.lastOfType('roomState');
+  assert.ok(caught && caught.type === 'roomState');
+  assert.equal(caught.phase, 'ROUND_ACTIVE');
+  assert.equal(caught.round?.index, 0, 'with the live round, so it can go straight in');
+  assert.equal(caught.rev, store.revFor(guest), 'and back in step');
+  assert.equal(hostConn.sent.length, hostHeard, 'nobody else hears about it');
+});
+
+test('a socket the room no longer sends to is told so by its heartbeat', () => {
+  const store = new RoomStore();
+  const { room } = roomWithHost(store);
+  const old = new FakeConn();
+  assert.ok(store.join(old, room.code, 'Guest', 'session-guest').ok);
+  assert.equal(typeof store.revFor(old), 'number');
+
+  const replacement = new FakeConn();
+  assert.ok(store.join(replacement, room.code, 'Guest', 'session-guest').ok);
+  assert.equal(store.revFor(old), null, 'so that phone knows to rejoin rather than wait');
+  assert.equal(store.sync(old), false, 'and a sync from it changes nothing');
+  assert.equal(store.revFor(new FakeConn()), null, 'nor from a socket that never joined');
+});
