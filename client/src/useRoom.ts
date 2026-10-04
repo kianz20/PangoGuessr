@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LOAD_HEADROOM_MS, ROUND_MS } from '@pangoguessr/shared';
+import { LOAD_HEADROOM_MS, ROUND_MS, normalizeCode } from '@pangoguessr/shared';
 import type {
   ErrorCode,
   GuessProgress,
@@ -400,13 +400,20 @@ export function useRoom(initialIntent: Intent | null = null) {
   };
 
   // A hub hand-off lands in its room; otherwise a reload, or Safari discarding the tab
-  // mid-game, should land back in the last one.
+  // mid-game, should land back in the last one — unless a QR link for a different room
+  // brought them here. Rejoining a long-gone last room first used to greet every scan with
+  // "No room with that code", even though the code in the link was fine.
   useEffect(() => {
     if (initialIntent) {
       start(initialIntent);
     } else {
       const last = recallRoom();
-      if (last) start({ kind: 'join', code: last.code, name: last.name }, true);
+      const linked = normalizeCode(new URLSearchParams(location.search).get('c') ?? '');
+      if (last && linked && linked !== last.code) {
+        forgetRoom();
+      } else if (last) {
+        start({ kind: 'join', code: last.code, name: last.name }, true);
+      }
     }
     return () => {
       // Closing on unmount is what makes StrictMode's double-mount harmless: the first
