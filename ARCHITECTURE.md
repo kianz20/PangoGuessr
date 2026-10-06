@@ -771,6 +771,10 @@ URL, they acted again on every reload and every return to the home screen. A hos
 reloaded created a second room and abandoned the first, a kicked player rejoined
 immediately, and a player whose room had closed rejoined it in a tight loop.
 
+**A QR scan joins on its own** when the phone already has a name saved from an earlier game;
+a first-timer gets the name-only invite screen. Since `c` now acts by itself too, it's
+stripped from the address bar as soon as the join lands, for the same reason as the hand-off.
+
 ### Room codes
 
 4 characters from a Crockford-style alphabet with `0 O 1 I L U` removed — people read

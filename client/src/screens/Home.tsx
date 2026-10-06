@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
 import { MAX_NAME_LENGTH, isValidCode, normalizeCode } from '@pangoguessr/shared';
 import { Wordmark } from '../components/Brand';
-
-const NAME_KEY = 'pangoguessr.name';
+import { recallName, rememberName } from '../session';
 
 export function Home({
   notice,
@@ -13,8 +12,9 @@ export function Home({
   onCreate: (name: string) => void;
   onJoin: (code: string, name: string) => void;
 }) {
-  const [name, setName] = useState(() => localStorage.getItem(NAME_KEY) ?? '');
-  // Scanning the QR lands here with the code already in the URL, so only the name is left.
+  const [name, setName] = useState(recallName);
+  // Scanning the QR with no name saved yet lands here with the code already in the URL, so
+  // only the name is left. With one saved, useRoom has joined without stopping here.
   const [code, setCode] = useState(() =>
     normalizeCode(new URLSearchParams(location.search).get('c') ?? ''),
   );
@@ -27,7 +27,7 @@ export function Home({
   const [invited, setInvited] = useState(() => isValidCode(code) && notice === null);
 
   useEffect(() => {
-    localStorage.setItem(NAME_KEY, name);
+    rememberName(name);
   }, [name]);
 
   const trimmed = name.trim();

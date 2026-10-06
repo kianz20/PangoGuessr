@@ -1,7 +1,8 @@
-import { normalizeCode } from '@pangoguessr/shared';
+import { isValidCode, normalizeCode } from '@pangoguessr/shared';
 
 const SESSION_KEY = 'pangoguessr.sessionId';
 const LAST_ROOM_KEY = 'pangoguessr.lastRoom';
+const NAME_KEY = 'pangoguessr.name';
 
 /**
  * The only identity in the system (§12). Clearing browser data means becoming a new
@@ -40,7 +41,8 @@ let handoff: Handoff | null | undefined;
  * every return to the home screen: a host whose tab reloaded mid-game created a second room
  * and abandoned the first, a kicked player walked straight back in, and a player whose room
  * had closed re-joined it in a loop. A reload now rejoins through recallRoom like any other.
- * `c` stays, as it's also the ordinary QR join link and only pre-fills the code.
+ * `c` stays, as it's also the ordinary QR join link; that goes once it has got them in
+ * (clearJoinLink).
  */
 export function readHandoff(): Handoff | null {
   if (handoff !== undefined) return handoff;
@@ -104,4 +106,32 @@ export function recallRoom(): LastRoom | null {
 
 export function forgetRoom(): void {
   localStorage.removeItem(LAST_ROOM_KEY);
+}
+
+/** The name typed on the home screen last time, so a returning player needn't type it again. */
+export function recallName(): string {
+  return localStorage.getItem(NAME_KEY) ?? '';
+}
+
+export function rememberName(name: string): void {
+  localStorage.setItem(NAME_KEY, name);
+}
+
+/** The room code in this page's URL — the QR join link — if it's a valid one. */
+export function linkedCode(): string | null {
+  const code = normalizeCode(new URLSearchParams(location.search).get('c') ?? '');
+  return isValidCode(code) ? code : null;
+}
+
+/**
+ * Drops `c` from the address bar once it has got them into a room. A QR link joins on its
+ * own when the name is already known, so left there it would do it again on every reload:
+ * a kicked player walking straight back in, or a closed room rejoined in a loop.
+ */
+export function clearJoinLink(): void {
+  const params = new URLSearchParams(location.search);
+  if (!params.has('c')) return;
+  params.delete('c');
+  const query = params.toString();
+  history.replaceState(history.state, '', `${location.pathname}${query ? `?${query}` : ''}`);
 }

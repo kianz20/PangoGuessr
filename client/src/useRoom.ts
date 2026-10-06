@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LOAD_HEADROOM_MS, ROUND_MS, normalizeCode } from '@pangoguessr/shared';
+import { LOAD_HEADROOM_MS, ROUND_MS } from '@pangoguessr/shared';
 import type {
   ErrorCode,
   GuessProgress,
@@ -9,7 +9,15 @@ import type {
   ServerMessage,
 } from '@pangoguessr/shared';
 import { Connection, type ConnectionEvents } from './connection';
-import { forgetRoom, getSessionId, recallRoom, rememberRoom } from './session';
+import {
+  clearJoinLink,
+  forgetRoom,
+  getSessionId,
+  linkedCode,
+  recallName,
+  recallRoom,
+  rememberRoom,
+} from './session';
 
 export type RoundView = {
   index: number;
@@ -243,6 +251,8 @@ export function useRoom(initialIntent: Intent | null = null) {
         // Promote a create into a join, so any later reconnect targets this room.
         intentRef.current = { kind: 'join', code: msg.code, name: me?.name ?? '' };
         if (me) rememberRoom({ code: msg.code, name: me.name });
+        // From here a reload rejoins through the remembered room, not the link.
+        clearJoinLink();
 
         const snapshot = msg.round;
         const pending = pendingGuessRef.current;
@@ -402,17 +412,21 @@ export function useRoom(initialIntent: Intent | null = null) {
   // A hub hand-off lands in its room; otherwise a reload, or Safari discarding the tab
   // mid-game, should land back in the last one — unless a QR link for a different room
   // brought them here. Rejoining a long-gone last room first used to greet every scan with
-  // "No room with that code", even though the code in the link was fine.
+  // "No room with that code", even though the code in the link was fine. A QR link joins
+  // straight away if this phone already knows their name; only a first-timer has to stop
+  // and type one.
   useEffect(() => {
     if (initialIntent) {
       start(initialIntent);
     } else {
       const last = recallRoom();
-      const linked = normalizeCode(new URLSearchParams(location.search).get('c') ?? '');
-      if (last && linked && linked !== last.code) {
-        forgetRoom();
-      } else if (last) {
+      const linked = linkedCode();
+      const name = recallName().trim();
+      if (last && (!linked || linked === last.code)) {
         start({ kind: 'join', code: last.code, name: last.name }, true);
+      } else {
+        if (last) forgetRoom();
+        if (linked && name) start({ kind: 'join', code: linked, name });
       }
     }
     return () => {
