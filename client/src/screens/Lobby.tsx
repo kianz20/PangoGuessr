@@ -1,5 +1,6 @@
-import { useEffect, useRef } from 'react';
-import { MAX_PLAYERS } from '@pangoguessr/shared';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { flushSync } from 'react-dom';
+import { MAX_NAME_LENGTH, MAX_PLAYERS, normalizeDisplayName } from '@pangoguessr/shared';
 import type { PublicPlayer, RoomStateMsg } from '@pangoguessr/shared';
 import { Avatar } from '../components/Avatar';
 import { SoundToggle } from '../components/Brand';
@@ -8,6 +9,23 @@ import { useFlip } from '../motion';
 import type { ColorOf } from '../players';
 import { play } from '../sound';
 
+/** Phone QR stays the enlarged lobby size. A wide host window fills the left column. */
+const QR_PHONE = 234;
+const QR_DESKTOP = 720;
+const HOST_COLUMNS = '(min-width: 1024px)';
+
+function useWideLobby() {
+  return useSyncExternalStore(
+    (onChange) => {
+      const query = window.matchMedia(HOST_COLUMNS);
+      query.addEventListener('change', onChange);
+      return () => query.removeEventListener('change', onChange);
+    },
+    () => window.matchMedia(HOST_COLUMNS).matches,
+    () => false,
+  );
+}
+
 export function Lobby({
   room,
   me,
@@ -15,6 +33,9 @@ export function Lobby({
   onLeave,
   onKick,
   onStart,
+  onRename,
+  renameError,
+  onDismissRenameError,
   notice,
 }: {
   room: RoomStateMsg;
@@ -23,10 +44,14 @@ export function Lobby({
   onLeave: () => void;
   onKick: (playerId: string) => void;
   onStart: () => void;
+  onRename: (name: string) => void;
+  renameError: string | null;
+  onDismissRenameError: () => void;
   notice: string | null;
 }) {
   const joinUrl = `${location.origin}/?c=${room.code}`;
   const isHost = me?.isHost ?? false;
+  const wide = useWideLobby();
   const listRef = useRef<HTMLUListElement>(null);
 
   // Someone leaving from the middle closes the gap with a slide rather than a jump. Joiners
@@ -43,7 +68,7 @@ export function Lobby({
   }, [order, room]);
 
   return (
-    <main className="screen screen--lobby">
+    <main className={`screen screen--lobby${isHost ? ' screen--host' : ''}`}>
       {notice && (
         <p className="notice" role="status">
           {notice}
@@ -55,7 +80,9 @@ export function Lobby({
         <p className="code" aria-label={`Room code ${room.code.split('').join(' ')}`}>
           {room.code}
         </p>
-        <QrCode url={joinUrl} size={180} />
+        <div className="join-card__qr">
+          <QrCode url={joinUrl} size={isHost && wide ? QR_DESKTOP : QR_PHONE} />
+        </div>
       </section>
 
       <section className="players">
@@ -72,15 +99,25 @@ export function Lobby({
               data-flip-id={player.id}
               className={player.connected ? 'player' : 'player player--away'}
             >
-              <span className="player__avatar">
-                {/* The same chip they'll wear on the reveal map, so people learn it here. */}
-                <Avatar name={player.name} color={colorOf(player.id)} you={player.id === room.youId} />
-                <ReadyBadge player={player} dealt={room.panoIds.length > 0} />
-              </span>
-              <span className="player__name">
-                {player.name}
-                {player.id === room.youId && <span className="player__you"> (you)</span>}
-              </span>
+              {player.id === room.youId ? (
+                <YourName
+                  name={player.name}
+                  color={colorOf(player.id)}
+                  player={player}
+                  dealt={room.panoIds.length > 0}
+                  error={renameError}
+                  onRename={onRename}
+                  onDismissError={onDismissRenameError}
+                />
+              ) : (
+                <>
+                  <span className="player__avatar">
+                    <Avatar name={player.name} color={colorOf(player.id)} />
+                    <ReadyBadge player={player} dealt={room.panoIds.length > 0} />
+                  </span>
+                  <span className="player__name">{player.name}</span>
+                </>
+              )}
               {player.isHost && <span className="badge">Host</span>}
               {!player.connected && <span className="player__status">reconnecting…</span>}
               {isHost && player.id !== room.youId && (
@@ -99,33 +136,192 @@ export function Lobby({
       </section>
 
       <footer className="lobby__actions">
-        {isHost ? (
-          <>
-            <button className="button button--primary" type="button" onClick={onStart}>
-              Start game
-            </button>
-            <p className="hint">
-              {room.totalRounds} rounds. The room locks once you start — nobody can join
-              until it’s over.
-            </p>
-          </>
-        ) : (
-          <p className="hint">Waiting for the host to start.</p>
-        )}
         <div className="lobby__row">
           <SoundToggle />
           <button className="button button--ghost" type="button" onClick={onLeave}>
             Leave room
           </button>
         </div>
-        <p className="hint">Sound’s off on every phone to start with. One phone with it on is plenty for a room.</p>
-        {isHost && (
-          <p className="hint hint--warn">
-            You’re the host — if you close this, the room closes for everyone.
-          </p>
+        {isHost ? (
+          <button className="button button--primary" type="button" onClick={onStart}>
+            Start game
+          </button>
+        ) : (
+          <p className="hint">Waiting for the host to start.</p>
         )}
       </footer>
     </main>
+  );
+}
+
+/**
+ * Your own row. Tap the name to edit it in place — the field is the name, not a form, and it
+ * saves when you leave it. A refusal stays on the row so a taken name never kicks you out.
+ */
+function YourName({
+  name,
+  color,
+  player,
+  dealt,
+  error,
+  onRename,
+  onDismissError,
+}: {
+  name: string;
+  color: string;
+  player: PublicPlayer;
+  dealt: boolean;
+  error: string | null;
+  onRename: (name: string) => void;
+  onDismissError: () => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const submitted = useRef<string | null>(null);
+  const ignoreBlur = useRef(false);
+  const editing = draft !== null;
+  const shown = localError ?? error;
+
+  useEffect(() => {
+    if (!error) return;
+    ignoreBlur.current = false;
+    setDraft((current) => current ?? name);
+    inputRef.current?.focus();
+  }, [error, name]);
+
+  useEffect(() => {
+    if (!editing) return;
+    // Covers a refusal reopening the field. The tap that opens it focuses inside the click,
+    // which is what actually raises the keyboard.
+    inputRef.current?.focus();
+  }, [editing]);
+
+  useEffect(() => {
+    if (!submitted.current || name !== submitted.current) return;
+    const accepted = submitted.current;
+    submitted.current = null;
+    setLocalError(null);
+    setDraft((current) =>
+      current !== null && normalizeDisplayName(current) !== accepted ? current : null,
+    );
+  }, [name]);
+
+  function close() {
+    ignoreBlur.current = true;
+    submitted.current = null;
+    setLocalError(null);
+    onDismissError();
+    setDraft(null);
+  }
+
+  function commit(reason: 'blur' | 'submit') {
+    if (draft === null || ignoreBlur.current) return;
+    const next = normalizeDisplayName(draft);
+    if (!next) {
+      if (reason === 'blur') {
+        close();
+        return;
+      }
+      setLocalError('Pick a name.');
+      return;
+    }
+    if (next === name) {
+      close();
+      return;
+    }
+    if (submitted.current === next) return;
+    setLocalError(null);
+    submitted.current = next;
+    onRename(next);
+  }
+
+  return (
+    <>
+      <span className="player__avatar">
+        {/* The same chip they'll wear on the reveal map, so people learn it here. */}
+        <Avatar name={draft ?? name} color={color} you />
+        <ReadyBadge player={player} dealt={dealt} />
+      </span>
+      {editing ? (
+        <form
+          className="player__rename"
+          onSubmit={(event) => {
+            event.preventDefault();
+            commit('submit');
+          }}
+        >
+          <input
+            ref={inputRef}
+            className="player__rename-input"
+            value={draft ?? ''}
+            maxLength={MAX_NAME_LENGTH}
+            aria-label="Your name"
+            aria-invalid={shown ? true : undefined}
+            enterKeyHint="done"
+            autoComplete="off"
+            autoCapitalize="words"
+            autoCorrect="off"
+            spellCheck={false}
+            onChange={(event) => {
+              submitted.current = null;
+              setDraft(event.target.value);
+              if (localError) setLocalError(null);
+              if (error) onDismissError();
+            }}
+            onBlur={() => {
+              if (ignoreBlur.current) {
+                ignoreBlur.current = false;
+                return;
+              }
+              commit('blur');
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                close();
+              }
+            }}
+          />
+          {shown && (
+            <p className="player__rename-error" role="alert">
+              {shown}
+            </p>
+          )}
+        </form>
+      ) : (
+        <button
+          className="player__name-btn"
+          type="button"
+          aria-label={`Change your name, ${name}`}
+          onClick={() => {
+            ignoreBlur.current = false;
+            setLocalError(null);
+            onDismissError();
+            // Mount the field inside this tap, then focus it. A focus from an effect is too
+            // late for a phone to open the keyboard.
+            flushSync(() => setDraft(name));
+            inputRef.current?.focus();
+            inputRef.current?.select();
+          }}
+        >
+          <span className="player__name">
+            {name}
+            <span className="player__you"> (you)</span>
+          </span>
+          <PencilIcon />
+        </button>
+      )}
+    </>
+  );
+}
+
+function PencilIcon() {
+  return (
+    <svg className="player__pencil" viewBox="0 0 24 24" aria-hidden>
+      <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" />
+      <path d="m15 5 4 4" />
+    </svg>
   );
 }
 

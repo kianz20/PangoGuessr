@@ -127,8 +127,8 @@ shows which mode it's in, so a change can't silently fail to stick.
 ## Testing
 
 ```bash
-npm test        # 64 unit tests: rooms, rounds, scoring, distance, sampling, zones, place names
-npm run smoke   # 63 end-to-end checks over real WebSockets; needs a server running
+npm test        # 90 unit tests: rooms, rounds, scoring, distance, sampling, zones, place names
+npm run smoke   # 67 end-to-end checks over real WebSockets; needs a server running
 node server/test/smoke-game.mjs 3200       # ...or a single suite against another port
 ```
 

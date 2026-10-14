@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LOAD_HEADROOM_MS, ROUND_MS } from '@pangoguessr/shared';
+import { LOAD_HEADROOM_MS, MAX_NAME_LENGTH, ROUND_MS, normalizeDisplayName } from '@pangoguessr/shared';
 import type {
   ErrorCode,
   GuessProgress,
@@ -16,6 +16,7 @@ import {
   linkedCode,
   recallName,
   recallRoom,
+  rememberName,
   rememberRoom,
 } from './session';
 
@@ -93,6 +94,8 @@ export function useRoom(initialIntent: Intent | null = null) {
    * restarting the clock, for what is usually a one-second blip.
    */
   const [linkDownSince, setLinkDownSince] = useState<number | null>(null);
+  /** A rename the room refused — shown on your own row, never a reason to leave. */
+  const [renameError, setRenameError] = useState<string | null>(null);
   /** Last round's ranks, kept client-side — the server has no reason to track history. */
   const previousRanksRef = useRef<Record<string, number> | null>(null);
   /**
@@ -110,6 +113,8 @@ export function useRoom(initialIntent: Intent | null = null) {
   const timersRef = useRef<number[]>([]);
   const pendingGuessRef = useRef<PendingGuess | null>(null);
   const clockReportRef = useRef<ClockReport | null>(null);
+  /** The name we asked for and haven't heard back about. Distinguishes a bad rename from a bad join. */
+  const pendingRenameRef = useRef<string | null>(null);
 
   /** The latest render's handlers, so the connection never calls into a stale one. */
   const eventsRef = useRef<ConnectionEvents | null>(null);
@@ -157,12 +162,14 @@ export function useRoom(initialIntent: Intent | null = null) {
       revRef.current = null;
       scoredRoundRef.current = null;
       previousRanksRef.current = null;
+      pendingRenameRef.current = null;
       forgetRoom();
       setRoom(null);
       setRound(null);
       setResults(null);
       setFinal(null);
       setLinkDownSince(null);
+      setRenameError(null);
       setNotice(message);
       setStatus('home');
     },
@@ -175,7 +182,9 @@ export function useRoom(initialIntent: Intent | null = null) {
       intentRef.current = intent;
       pendingGuessRef.current = null;
       clockReportRef.current = null;
+      pendingRenameRef.current = null;
       revRef.current = null;
+      setRenameError(null);
       setNotice(null);
       setLinkDownSince(null);
       setStatus(reload ? 'reconnecting' : 'connecting');
@@ -250,7 +259,17 @@ export function useRoom(initialIntent: Intent | null = null) {
         const me = msg.players.find((p) => p.id === msg.youId);
         // Promote a create into a join, so any later reconnect targets this room.
         intentRef.current = { kind: 'join', code: msg.code, name: me?.name ?? '' };
-        if (me) rememberRoom({ code: msg.code, name: me.name });
+        if (me) {
+          rememberRoom({ code: msg.code, name: me.name });
+          rememberName(me.name);
+        }
+        if (pendingRenameRef.current && me?.name === pendingRenameRef.current) {
+          pendingRenameRef.current = null;
+          setRenameError(null);
+        }
+        // A game starting leaves the lobby, and a refusal from a moment ago shouldn't
+        // be waiting there when it comes back.
+        if (msg.phase !== 'LOBBY') setRenameError(null);
         // From here a reload rejoins through the remembered room, not the link.
         clearJoinLink();
 
@@ -380,6 +399,17 @@ export function useRoom(initialIntent: Intent | null = null) {
       }
 
       if (msg.type === 'error') {
+        // A rename that loses (taken, blank) must not send them home — they are already in
+        // the room. A join that loses with the same codes still should: nothing is pending.
+        if (
+          pendingRenameRef.current !== null &&
+          (msg.code === 'NAME_TAKEN' || msg.code === 'NAME_INVALID')
+        ) {
+          pendingRenameRef.current = null;
+          if (room?.phase === 'LOBBY') setRenameError(msg.message);
+          return;
+        }
+
         // Only errors that mean "you are not in a room" send you home. A transient one — the
         // location pool still filling, a stale button press — must never eject the host from
         // their own room; it's a message on the screen they're already on.
@@ -475,6 +505,25 @@ export function useRoom(initialIntent: Intent | null = null) {
     (playerId: string) => connection.send({ type: 'kick', playerId }),
     [connection],
   );
+
+  /** A new name for this phone, already in the room. The lobby shows a refusal inline. */
+  const rename = useCallback(
+    (displayName: string) => {
+      const name = normalizeDisplayName(displayName);
+      if (!name) {
+        setRenameError(`Pick a name of 1–${MAX_NAME_LENGTH} characters.`);
+        return;
+      }
+      setRenameError(null);
+      pendingRenameRef.current = name;
+      if (!connection.send({ type: 'rename', displayName: name })) {
+        pendingRenameRef.current = null;
+        setRenameError('You’re disconnected. Try again in a moment.');
+      }
+    },
+    [connection],
+  );
+  const clearRenameError = useCallback(() => setRenameError(null), []);
   const startRound = useCallback(() => connection.send({ type: 'startRound' }), [connection]);
   const advance = useCallback(() => connection.send({ type: 'advance' }), [connection]);
   const cancelGame = useCallback(() => connection.send({ type: 'cancelGame' }), [connection]);
@@ -542,11 +591,14 @@ export function useRoom(initialIntent: Intent | null = null) {
     final,
     rankDeltas,
     linkDownSince,
+    renameError,
     createRoom,
     joinRoom,
     leaveRoom,
     resume,
     kick,
+    rename,
+    clearRenameError,
     startRound,
     advance,
     cancelGame,

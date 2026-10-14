@@ -15,6 +15,7 @@ import {
   ROUNDS_PER_GAME,
   haversineKm,
   normalizeCode,
+  normalizeDisplayName,
   rankByScore,
   scoreGuess,
 } from '@pangoguessr/shared';
@@ -150,7 +151,7 @@ const realScheduler: Scheduler = {
 };
 
 export type Failure = { ok: false; code: ErrorCode; message: string };
-export type Success = { ok: true; room: Room; player: Player };
+export type Success = { ok: true; room: Room; player: Player; renamed?: boolean };
 export type Result = Success | Failure;
 
 const fail = (code: ErrorCode, message: string): Failure => ({ ok: false, code, message });
@@ -191,7 +192,7 @@ export class RoomStore {
   }
 
   create(conn: Conn, displayName: string, sessionId: string, now = Date.now()): Result {
-    const name = normalizeName(displayName);
+    const name = normalizeDisplayName(displayName);
     if (!name) return fail('NAME_INVALID', `Pick a name of 1–${MAX_NAME_LENGTH} characters.`);
 
     const room: Room = {
@@ -223,7 +224,7 @@ export class RoomStore {
     const room = this.get(code);
     if (!room) return fail('ROOM_NOT_FOUND', "No room with that code. Check the code and try again.");
 
-    const name = normalizeName(displayName);
+    const name = normalizeDisplayName(displayName);
     if (!name) return fail('NAME_INVALID', `Pick a name of 1–${MAX_NAME_LENGTH} characters.`);
 
     const existingId = room.bySession.get(sessionId);
@@ -267,6 +268,30 @@ export class RoomStore {
     const player = this.addPlayer(room, conn, name, sessionId, false);
     this.touch(room, now);
     return { ok: true, room, player };
+  }
+
+  /**
+   * A new name for someone already in the room. Any phase: a typo noticed after joining
+   * shouldn't mean leaving. Uniqueness exempts this player, same as a reconnect (§8).
+   * `renamed` is false when the board already shows that name, so nothing needs broadcasting.
+   */
+  rename(conn: Conn, displayName: string, now = Date.now()): Result {
+    const located = this.locate(conn);
+    if (!located) return fail('BAD_MESSAGE', 'You are not in a room.');
+    const { room, player } = located;
+
+    const name = normalizeDisplayName(displayName);
+    if (!name) return fail('NAME_INVALID', `Pick a name of 1–${MAX_NAME_LENGTH} characters.`);
+    if (isNameTaken(room, name, player.id)) {
+      return fail('NAME_TAKEN', 'Someone in the room is already using that name.');
+    }
+
+    const renamed = player.name !== name;
+    if (renamed) {
+      player.name = name;
+      this.touch(room, now);
+    }
+    return { ok: true, room, player, renamed };
   }
 
   /** Explicit leave — removes the player outright, unlike a disconnect. */
@@ -1010,9 +1035,3 @@ function isFiniteLatLng(lat: number, lng: number): boolean {
   );
 }
 
-function normalizeName(raw: unknown): string | null {
-  if (typeof raw !== 'string') return null;
-  const name = raw.replace(/\s+/g, ' ').trim();
-  if (!name || name.length > MAX_NAME_LENGTH) return null;
-  return name;
-}

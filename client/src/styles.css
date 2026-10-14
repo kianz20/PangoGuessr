@@ -163,25 +163,48 @@ body {
 /* Lobby */
 .join-card {
   display: flex;
+  flex: none;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
-  padding: 20px;
+  gap: 0;
+  padding: 4px 12px 4px;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 20px;
+  border-radius: 16px;
 }
 
 .join-card__hint {
   margin: 0;
   color: var(--muted);
-  font-size: 0.9rem;
+  font-size: 0.85rem;
+  line-height: 1.1;
+  /* Drop the extra leading above the caps. The bottom edge stays the text edge so a
+     hostname with a descender (g, y, p) is not clipped. */
+  text-box: trim-both cap text;
+}
+
+.join-card .code {
+  margin-top: 2px;
+  line-height: 0.78;
+  text-box: trim-both cap alphabetic;
+}
+
+@supports (text-box: trim-both cap alphabetic) {
+  .join-card .code {
+    line-height: 1;
+  }
+}
+
+/* On a phone this box disappears and the QR stays a flex child of the card. */
+.join-card__qr {
+  display: contents;
 }
 
 .code {
   margin: 0;
   font-size: 3rem;
   font-weight: 800;
+  line-height: 1;
   letter-spacing: 0.22em;
   /* Read aloud across a room, so the glyphs need to be unmistakable (§8). */
   font-variant-numeric: slashed-zero tabular-nums;
@@ -190,17 +213,24 @@ body {
 
 .qr {
   display: block;
-  border-radius: 10px;
+  max-width: 100%;
+  height: auto;
+  margin-top: 2px;
+  border-radius: 8px;
   background: #fff;
-  padding: 6px;
+  padding: 2px;
 }
 
 .qr--placeholder {
+  width: var(--qr-size, 200px);
+  height: var(--qr-size, 200px);
   background: var(--surface-2);
 }
 
 .players {
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .players__title {
@@ -267,6 +297,91 @@ body {
   cursor: pointer;
 }
 
+/* Your name is the control. The field that replaces it is the same text, underlined. */
+.player__name-btn {
+  flex: 1;
+  min-width: 0;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.player__name-btn .player__name {
+  flex: 0 1 auto;
+}
+
+.player__name-btn:active {
+  opacity: 0.72;
+}
+
+.player__pencil {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+  opacity: 0.8;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.player__rename {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+}
+
+.player__rename-input {
+  width: 100%;
+  margin: 0;
+  padding: 0 0 2px;
+  border: 0;
+  border-bottom: 1.5px solid color-mix(in srgb, var(--accent) 55%, var(--line));
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 600;
+  appearance: none;
+  line-height: 1.3;
+  caret-color: var(--accent);
+}
+
+.player__rename-input:focus {
+  outline: none;
+  border-bottom-color: var(--accent);
+}
+
+.player__rename-input[aria-invalid='true'] {
+  border-bottom-color: var(--danger);
+  caret-color: var(--danger);
+}
+
+.player__rename-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.25;
+}
+
 .badge {
   padding: 2px 8px;
   font-size: 0.7rem;
@@ -280,8 +395,9 @@ body {
 
 .lobby__actions {
   display: flex;
+  flex: none;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 .hint {
@@ -1079,6 +1195,10 @@ body {
     font-size: 3.6rem;
   }
 
+  .screen--lobby .code {
+    font-size: 3rem;
+  }
+
   .podium {
     min-height: 300px;
   }
@@ -1267,6 +1387,11 @@ button {
   .button--ghost:not(:disabled):hover {
     background: var(--surface);
     border-color: color-mix(in srgb, var(--text) 28%, var(--line));
+  }
+
+  .player__name-btn:hover .player__pencil {
+    color: var(--accent);
+    opacity: 1;
   }
 }
 
@@ -1975,6 +2100,25 @@ button {
   animation: spin 0.9s linear infinite;
 }
 
+/* The lobby is one screen: the join card stays put, the names scroll, Start stays at the bottom. */
+.screen--lobby {
+  gap: 8px;
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
+  padding-top: max(8px, env(safe-area-inset-top));
+  padding-bottom: max(8px, env(safe-area-inset-bottom));
+}
+
+.lobby__actions {
+  flex: none;
+  z-index: 5;
+  margin-top: auto;
+  padding-top: 10px;
+  background: var(--bg);
+  border-top: 1px solid var(--line);
+}
+
 .lobby__row {
   display: flex;
   gap: 8px;
@@ -1982,6 +2126,78 @@ button {
 
 .lobby__row > * {
   flex: 1;
+}
+
+/*
+ * Host on a desktop window: the join card takes the wide column so the QR can fill it,
+ * the names sit beside it, and Start stays on the bottom edge of the screen.
+ */
+@media (min-width: 1024px) {
+  .screen.screen--lobby.screen--host {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 400px);
+    grid-template-rows: minmax(0, 1fr) auto;
+    column-gap: 20px;
+    row-gap: 10px;
+    max-width: 1280px;
+    align-items: stretch;
+  }
+
+  .screen.screen--lobby.screen--host > .join-card {
+    grid-column: 1;
+    grid-row: 1;
+    height: 100%;
+    min-height: 0;
+    justify-content: flex-start;
+  }
+
+  .screen.screen--lobby.screen--host > .players {
+    grid-column: 2;
+    grid-row: 1;
+    min-height: 0;
+  }
+
+  .screen.screen--lobby.screen--host > .lobby__actions {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    margin-top: 0;
+  }
+
+  /* A notice takes its own row. Without one, that row would still spend the row gap. */
+  .screen.screen--lobby.screen--host:has(> .notice) {
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+
+  .screen.screen--lobby.screen--host:has(> .notice) > .notice {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .screen.screen--lobby.screen--host:has(> .notice) > .join-card,
+  .screen.screen--lobby.screen--host:has(> .notice) > .players {
+    grid-row: 2;
+  }
+
+  .screen.screen--lobby.screen--host:has(> .notice) > .lobby__actions {
+    grid-row: 3;
+  }
+
+  .screen--host .join-card__qr {
+    display: block;
+    flex: 1 1 0;
+    width: 100%;
+    min-height: 0;
+    container-type: size;
+  }
+
+  .screen--host .join-card__qr .qr {
+    width: min(100cqi, calc(100cqh - 4px));
+    height: auto;
+    max-width: none;
+    aspect-ratio: 1;
+    margin-top: 4px;
+    margin-inline: auto;
+  }
 }
 
 /* Podium: the steps are there from the start; the players arrive on them. */

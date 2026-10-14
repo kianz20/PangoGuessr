@@ -346,6 +346,19 @@ function handleMessage(conn: Conn, msg: ClientMessage): void {
       return;
     }
 
+    case 'rename': {
+      const result = store.rename(conn, msg.displayName);
+      if (!result.ok) {
+        conn.send({ type: 'error', code: result.code, message: result.message });
+        return;
+      }
+      if (result.renamed) {
+        console.log(`[room ${result.room.code}] ${result.player.name} renamed`);
+        store.broadcastState(result.room);
+      }
+      return;
+    }
+
     case 'leave': {
       const room = store.leave(conn);
       if (room) store.broadcastState(room);

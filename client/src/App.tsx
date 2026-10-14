@@ -37,11 +37,14 @@ function Game() {
     final,
     rankDeltas,
     linkDownSince,
+    renameError,
     createRoom,
     joinRoom,
     leaveRoom,
     resume,
     kick,
+    rename,
+    clearRenameError,
     startRound,
     advance,
     cancelGame,
@@ -161,6 +164,9 @@ function Game() {
             onLeave={leaveRoom}
             onKick={kick}
             onStart={startRound}
+            onRename={rename}
+            renameError={renameError}
+            onDismissRenameError={clearRenameError}
           />
         );
     }

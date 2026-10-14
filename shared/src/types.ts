@@ -140,6 +140,8 @@ export type ReconnectDiag = {
 export type ClientMessage =
   | { type: 'create'; displayName: string; sessionId: string }
   | { type: 'join'; code: string; displayName: string; sessionId: string; diag?: ReconnectDiag }
+  /** This phone is already in the room and wants a different name on the board. */
+  | { type: 'rename'; displayName: string }
   | { type: 'leave' }
   | { type: 'kick'; playerId: string } // host only
   | { type: 'startRound' } // host only

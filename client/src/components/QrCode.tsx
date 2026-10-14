@@ -21,6 +21,8 @@ export function QrCode({ url, size = 200 }: { url: string; size?: number }) {
     };
   }, [url, size]);
 
-  if (!dataUrl) return <div className="qr qr--placeholder" style={{ width: size, height: size }} />;
+  if (!dataUrl) {
+    return <div className="qr qr--placeholder" style={{ ['--qr-size' as string]: `${size}px` }} />;
+  }
   return <img className="qr" src={dataUrl} alt={`QR code to join at ${url}`} width={size} height={size} />;
 }

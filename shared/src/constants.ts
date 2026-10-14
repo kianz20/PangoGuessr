@@ -22,6 +22,14 @@ export const MAX_PLAYERS = 20;
 
 export const MAX_NAME_LENGTH = 16;
 
+/** Collapse whitespace and cap the length. Shared so joining and renaming agree. */
+export function normalizeDisplayName(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const name = raw.replace(/\s+/g, ' ').trim();
+  if (!name || name.length > MAX_NAME_LENGTH) return null;
+  return name;
+}
+
 /**
  * How long the host's socket may be gone before the room is dropped (§4).
  * A locked phone or a few seconds of lost WiFi must not nuke the game.

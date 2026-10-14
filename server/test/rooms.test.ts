@@ -165,6 +165,63 @@ test('the name-uniqueness check exempts the reconnecting player themselves', () 
   assert.ok(back.ok, 'reconnecting with your own name must be allowed');
 });
 
+test('a player can change their name after joining, but not onto someone else', () => {
+  const store = new RoomStore();
+  const { conn: hostConn, room, player: host } = roomWithHost(store, 'Host');
+  const guest = new FakeConn();
+  const joined = store.join(guest, room.code, 'Kian', 'session-a');
+  assert.ok(joined.ok);
+
+  const renamed = store.rename(guest, '  Sam   I ');
+  assert.ok(renamed.ok);
+  assert.equal(renamed.renamed, true);
+  assert.equal(joined.player.name, 'Sam I');
+
+  store.broadcastState(room);
+  const state = hostConn.lastOfType('roomState');
+  assert.ok(state && state.type === 'roomState');
+  assert.equal(
+    state.players.find((p) => p.id === joined.player.id)?.name,
+    'Sam I',
+    'everyone else is told',
+  );
+
+  const taken = store.rename(guest, 'host');
+  assert.equal(taken.ok, false);
+  if (!taken.ok) assert.equal(taken.code, 'NAME_TAKEN');
+  assert.equal(joined.player.name, 'Sam I', 'a refused rename leaves the name alone');
+
+  const blank = store.rename(guest, '   ');
+  assert.equal(blank.ok, false);
+  if (!blank.ok) assert.equal(blank.code, 'NAME_INVALID');
+
+  const tooLong = store.rename(guest, 'abcdefghijklmnopq');
+  assert.equal(tooLong.ok, false);
+  if (!tooLong.ok) assert.equal(tooLong.code, 'NAME_INVALID');
+
+  const same = store.rename(guest, 'Sam I');
+  assert.ok(same.ok);
+  assert.equal(same.renamed, false, 'the same name is not a change');
+
+  const casing = store.rename(guest, 'sam i');
+  assert.ok(casing.ok);
+  assert.equal(casing.renamed, true);
+  assert.equal(joined.player.name, 'sam i', 'their own name, retitled, is not a clash');
+
+  room.phase = 'ROUND_ACTIVE';
+  const midGame = store.rename(guest, 'Ren');
+  assert.ok(midGame.ok);
+  assert.equal(joined.player.name, 'Ren');
+
+  const hostRename = store.rename(hostConn, 'Ada');
+  assert.ok(hostRename.ok);
+  assert.equal(host.name, 'Ada');
+
+  const stranger = store.rename(new FakeConn(), 'Nope');
+  assert.equal(stranger.ok, false);
+  if (!stranger.ok) assert.equal(stranger.code, 'BAD_MESSAGE');
+});
+
 test('a different player cannot take a name already in the room', () => {
   const store = new RoomStore();
   const { room } = roomWithHost(store);
