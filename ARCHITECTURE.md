@@ -543,7 +543,16 @@ Selection per round:
 4. Metadata lookup **with `radius: 5000`** — this asks for the nearest panorama within 5km
    rather than an exact hit, which raises the success rate enormously. Without a radius, a
    random point almost never lands on a road.
-5. On miss, retry. After ~15 misses, re-draw a different group and zone entirely.
+5. On miss, retry — three points at a time — **in the same zone**. Abandoning a country after
+   a run of misses quietly hands its rounds to whichever countries have denser coverage, so
+   ocean-heavy boxes came up far less often than their weight. After 60 misses the search
+   narrows to the zone's ten biggest towns (taken from the bundled GeoNames extract, so
+   zones drawn in `/admin` get them too): 60 more tries in a ~15km box around a randomly
+   chosen one. Only a zone that finds nothing either way is written off, and it's then left
+   out of every later draw until the zones change.
+6. The pool fills every missing slot in parallel, steering each new sample away from
+   countries already held or being searched, and a dealt deck skips a repeated country while
+   another is available. Independent weighted draws repeat a country in most five-round games.
 
 ### Naming the location on the reveal
 

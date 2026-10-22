@@ -151,17 +151,143 @@ test('sampling retries past misses and reports them', () => {
   });
 });
 
-test('sampling gives up after exhausting two zones rather than looping forever', async () => {
-  const s = stats();
+test('misses keep searching the drawn country instead of handing the round to another', async () => {
+  const groups: ZoneGroup[] = [
+    { id: 'sparse', name: 'Sparse', weight: 1, zones: [{ id: 's', name: 's', weight: 1, bbox: [0, 0, 1, 1] }] },
+    { id: 'dense', name: 'Dense', weight: 1, zones: [{ id: 'd', name: 'd', weight: 1, bbox: [10, 10, 11, 11] }] },
+  ];
+  // Sparse hits one point in twenty, dense hits every time. The old loop gave up on sparse
+  // after 15 misses and drew again, so dense took far more than its half of the rounds.
+  let sparseTries = 0;
+  const fetcher: MetadataFetcher = async (point) => {
+    if (point.lat < 5 && ++sparseTries % 20 !== 0) return null;
+    return { panoId: 'P', at: point };
+  };
+
+  let sparse = 0;
+  for (let i = 0; i < 400; i++) {
+    const hit = await samplePanorama(groups, fetcher, stats());
+    if (hit?.groupId === 'sparse') sparse++;
+  }
+  assert.ok(Math.abs(sparse / 400 - 0.5) < 0.1, `sparse took ${sparse}/400`);
+});
+
+test('a zone with no coverage at all is written off and the rest still deal', async () => {
+  const groups: ZoneGroup[] = [
+    { id: 'ocean', name: 'Ocean', weight: 1, zones: [{ id: 'o', name: 'o', weight: 1, bbox: [0, 0, 1, 1] }] },
+    { id: 'land', name: 'Land', weight: 1, zones: [{ id: 'l', name: 'l', weight: 1, bbox: [10, 10, 11, 11] }] },
+  ];
+  let calls = 0;
+  const fetcher: MetadataFetcher = async (point) => {
+    calls++;
+    return point.lat < 5 ? null : { panoId: 'P', at: point };
+  };
+
+  const dead = new Set<string>();
+  for (let i = 0; i < 50; i++) {
+    const hit = await samplePanorama(groups, fetcher, stats(), Math.random, {
+      deadZones: dead,
+      citiesIn: () => [{ lat: 0.5, lng: 0.5 }],
+    });
+    assert.equal(hit?.groupId, 'land');
+  }
+  assert.deepEqual([...dead], ['o'], 'the ocean box is remembered as dead');
+  // Searched to exhaustion once (60 in the box, 60 near its town), never again; the rest are
+  // land batches of 3.
+  assert.ok(calls <= 120 + 50 * 3, `${calls} calls`);
+});
+
+test('sampling gives up once every zone has been written off', async () => {
   let calls = 0;
   const allOcean: MetadataFetcher = async () => {
     calls++;
     return null;
   };
 
-  const hit = await samplePanorama(ZONE_GROUPS, allOcean, s);
+  const hit = await samplePanorama(ZONE_GROUPS, allOcean, stats());
   assert.equal(hit, null);
-  assert.equal(calls, 30, '15 misses per zone, two zones');
+  assert.equal(calls, allZones(ZONE_GROUPS).length * 120, '60 in the box, 60 near its towns, then it stops');
+});
+
+test('a box that keeps missing falls back to its biggest towns before giving up', async () => {
+  const groups: ZoneGroup[] = [
+    { id: 'nz', name: 'New Zealand', weight: 1, zones: [{ id: 'nz', name: 'nz', weight: 1, bbox: [-46.7, 166.4, -34.4, 178.6] }] },
+  ];
+  const auckland = { lat: -36.85, lng: 174.76 };
+  // Only within ~20km of Auckland has coverage, so the uniform box search almost never hits.
+  const s = stats();
+  const nearAuckland: MetadataFetcher = async (point) =>
+    Math.abs(point.lat - auckland.lat) < 0.2 && Math.abs(point.lng - auckland.lng) < 0.2
+      ? { panoId: 'AKL', at: point }
+      : null;
+  const random = sequence([0.01, 0.99, 0.5, 0.02, 0.98, 0.3, 0.7]);
+
+  const dead = new Set<string>();
+  const hit = await samplePanorama(groups, nearAuckland, s, random, {
+    deadZones: dead,
+    citiesIn: () => [auckland],
+  });
+  assert.equal(hit?.panoId, 'AKL');
+  assert.equal(dead.size, 0, 'a zone rescued by its towns is not written off');
+  assert.ok(s.misses >= 60, 'the box itself was searched first');
+});
+
+test('the default fallback towns are the biggest places in the box', async () => {
+  const { largestPlacesIn } = await import('../src/places');
+  const nz = largestPlacesIn([-46.7, 166.4, -34.4, 178.6], 3);
+  assert.equal(nz.length, 3);
+  // Auckland is by far New Zealand's largest city.
+  assert.ok(Math.abs(nz[0]!.lat - -36.85) < 0.3 && Math.abs(nz[0]!.lng - 174.76) < 0.3, JSON.stringify(nz[0]));
+  assert.deepEqual(largestPlacesIn([-60, -140, -59, -139], 5), [], 'open ocean has no towns');
+});
+
+test('a game deck avoids repeating a country while there are others to draw', async () => {
+  let n = 0;
+  const fetcher: MetadataFetcher = async (point) => ({ panoId: `PANO_${n++}`, at: point });
+  const pool = new PooledLocationSource(fetcher, stats(), () => ZONE_GROUPS, 8);
+  await pool.warm();
+
+  const deck = pool.take(ROUNDS_PER_GAME)!;
+  const countryOf = (lat: number, lng: number) =>
+    ZONE_GROUPS.find((g) =>
+      g.zones.some(({ bbox: [s, w, no, e] }) => lat >= s && lat <= no && lng >= w && lng <= e),
+    )!.id;
+  const countries = deck.map((l) => countryOf(l.at.lat, l.at.lng));
+  assert.equal(new Set(countries).size, ROUNDS_PER_GAME, `countries: ${countries.join(', ')}`);
+  assert.ok(!('groupId' in deck[0]!), 'pool bookkeeping stays out of the dealt deck');
+});
+
+test('a cold pool searches every slot at once rather than one after another', async () => {
+  let inFlight = 0;
+  let peak = 0;
+  let n = 0;
+  const slow: MetadataFetcher = async (point) => {
+    inFlight++;
+    peak = Math.max(peak, inFlight);
+    await new Promise((r) => setTimeout(r, 5));
+    inFlight--;
+    return { panoId: `PANO_${n++}`, at: point };
+  };
+  const pool = new PooledLocationSource(slow, stats(), () => ZONE_GROUPS, 8);
+  await pool.warm();
+  assert.equal(pool.size, 8);
+  assert.ok(peak >= 8, `peak concurrency ${peak}`);
+});
+
+test('a refill still running when the zones change does not land in the new pool', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  let n = 0;
+  const fetcher: MetadataFetcher = async (point) => {
+    await gate;
+    return { panoId: `PANO_${n++}`, at: point };
+  };
+  const pool = new PooledLocationSource(fetcher, stats(), () => ZONE_GROUPS, 5);
+  const warming = pool.warm();
+  pool.clear();
+  release();
+  await warming;
+  assert.equal(pool.size, 0, 'stale results were dropped');
 });
 
 test('a denied key surfaces as an error instead of an endless retry', async () => {

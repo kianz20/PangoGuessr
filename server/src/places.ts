@@ -180,6 +180,29 @@ export function describePlace(place: Place): string {
   return `${km} km from ${where}`;
 }
 
+/**
+ * The most populous places inside a box, biggest first — the fallback search targets for a
+ * zone whose random points keep missing (§7). Derived from the same extract rather than a
+ * hand-kept list, so a zone drawn in /admin gets its own without anyone maintaining one.
+ */
+export function largestPlacesIn(
+  bbox: readonly [south: number, west: number, north: number, east: number],
+  count: number,
+  data = loadPlaces(),
+): LatLng[] {
+  const [south, west, north, east] = bbox;
+  const inside: number[] = [];
+  for (let i = 0; i < data.names.length; i++) {
+    const lat = data.lat[i]!;
+    const lng = data.lng[i]!;
+    if (lat >= south && lat <= north && lng >= west && lng <= east) inside.push(i);
+  }
+  return inside
+    .sort((a, b) => data.population[b]! - data.population[a]!)
+    .slice(0, count)
+    .map((i) => ({ lat: data.lat[i]!, lng: data.lng[i]! }));
+}
+
 /** Convenience for callers that want a name or nothing. */
 export function describeLocation(at: LatLng): string | null {
   const place = nearestPlace(at);

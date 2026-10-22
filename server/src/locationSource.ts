@@ -54,6 +54,9 @@ export class FixedLocationSource implements LocationSource {
  * re-sample the whole pool from scratch. A big target turns idle time into quota burn.
  */
 const POOL_TARGET = 8;
+/** The country it came from stays with the pool, so a deck can avoid repeating one. */
+type PooledLocation = RoundLocation & { groupId: string };
+
 /** How long to wait after a refill failure before trying again, so a bad key doesn't spin. */
 const BACKOFF_MS = 30_000;
 
@@ -64,7 +67,7 @@ const BACKOFF_MS = 30_000;
  * over-fetching costs nothing but time the server has spare.
  */
 export class PooledLocationSource implements LocationSource {
-  private readonly pool: RoundLocation[] = [];
+  private readonly pool: PooledLocation[] = [];
   /**
    * The in-flight refill, not a boolean: callers must be able to *await* a refill that is
    * already running. A boolean made `warm()` return while the pool was still nearly empty.
@@ -72,6 +75,10 @@ export class PooledLocationSource implements LocationSource {
   private inFlight: Promise<void> | null = null;
   private pausedUntil = 0;
   private lastError: string | null = null;
+  /** Zones that searched to exhaustion without coverage; forgotten when the zones change. */
+  private readonly deadZones = new Set<string>();
+  /** Bumped by `clear()`, so a refill still running for the old zones can't land its results. */
+  private generation = 0;
 
   constructor(
     private readonly fetcher: MetadataFetcher,
@@ -90,6 +97,8 @@ export class PooledLocationSource implements LocationSource {
     this.pool.length = 0;
     this.pausedUntil = 0;
     this.lastError = null;
+    this.deadZones.clear();
+    this.generation++;
   }
 
   get size(): number {
@@ -103,7 +112,7 @@ export class PooledLocationSource implements LocationSource {
       void this.refill();
       return null;
     }
-    const taken = this.pool.splice(0, count);
+    const taken = this.takeDistinct(count);
     void this.refill();
     return taken;
   }
@@ -136,15 +145,67 @@ export class PooledLocationSource implements LocationSource {
     return this.inFlight;
   }
 
+  /**
+   * Oldest first, but skipping a country already in the deck while another is available.
+   * Drawing rounds independently by weight repeats a country in most games, which is what
+   * makes a run of five feel anything but random.
+   */
+  private takeDistinct(count: number): RoundLocation[] {
+    const picked: number[] = [];
+    const groups = new Set<string>();
+    for (let i = 0; i < this.pool.length && picked.length < count; i++) {
+      if (groups.has(this.pool[i]!.groupId)) continue;
+      groups.add(this.pool[i]!.groupId);
+      picked.push(i);
+    }
+    // Not enough countries to go round: make up the numbers in pool order.
+    for (let i = 0; i < this.pool.length && picked.length < count; i++) {
+      if (!picked.includes(i)) picked.push(i);
+    }
+    const taken = picked.map((i) => {
+      const { groupId: _groupId, ...location } = this.pool[i]!;
+      return location;
+    });
+    for (const i of [...picked].sort((a, b) => b - a)) this.pool.splice(i, 1);
+    return taken;
+  }
+
+  /**
+   * Every missing slot is searched at once. Done one after another, a cold pool took a
+   * round-trip chain per slot — the lobby's "finding locations" wait — for no reason.
+   */
   private async runRefill(): Promise<void> {
-    try {
-      while (this.pool.length < this.target) {
-        const hit = await samplePanorama(this.zonesOf(), this.fetcher, this.sampleStats);
+    const generation = this.generation;
+    let failed = false;
+    const cancelled = () => failed || generation !== this.generation;
+    /** Countries other slots are searching right now, so they don't all land on one. */
+    const searching: string[] = [];
+
+    const fillSlot = async (): Promise<void> => {
+      while (!cancelled() && this.pool.length < this.target) {
+        // Countries already held or being searched, so the next deck can be five different ones.
+        const avoidGroups = new Set([...this.pool.map((location) => location.groupId), ...searching]);
+        let drawn: string | null = null;
+        const hit = await samplePanorama(this.zonesOf(), this.fetcher, this.sampleStats, Math.random, {
+          avoidGroups,
+          deadZones: this.deadZones,
+          cancelled,
+          onDraw: (groupId) => {
+            if (drawn !== null) searching.splice(searching.indexOf(drawn), 1);
+            searching.push((drawn = groupId));
+          },
+        }).finally(() => {
+          if (drawn !== null) searching.splice(searching.indexOf(drawn), 1);
+        });
+        if (cancelled()) return;
         if (!hit) {
+          failed = true;
           this.lastError = 'sampling found no coverage';
           this.pausedUntil = Date.now() + BACKOFF_MS;
           return;
         }
+        // Two slots searching one zone can land on the same panorama; search again.
+        if (this.pool.some((location) => location.panoId === hit.panoId)) continue;
         this.pool.push({
           // Panorama IDs are stable, so this doubles as a dedupe key within the pool.
           id: hit.panoId,
@@ -153,11 +214,19 @@ export class PooledLocationSource implements LocationSource {
           name: describeLocation(hit.at) ?? hit.zoneName,
           at: hit.at,
           panoId: hit.panoId,
+          groupId: hit.groupId,
         });
         this.lastError = null;
+        return;
       }
+    };
+
+    try {
+      const missing = Math.max(this.target - this.pool.length, 0);
+      await Promise.all(Array.from({ length: missing }, fillSlot));
     } catch (err) {
       // A denied key or exhausted quota must not turn into a hot retry loop.
+      failed = true;
       this.lastError = err instanceof Error ? err.message : String(err);
       this.pausedUntil = Date.now() + BACKOFF_MS;
       console.error('[pool] refill failed:', this.lastError);

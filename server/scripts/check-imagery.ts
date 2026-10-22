@@ -10,7 +10,9 @@
  */
 import { loadDotEnv } from '../src/env';
 import { googleMetadataFetcher, type SampleStats } from '../src/streetview';
-import { ZONES, randomPointIn } from '../src/zones';
+import { ZONE_GROUPS, allZones, randomPointIn } from '../src/zones';
+
+const ZONES = allZones(ZONE_GROUPS);
 
 loadDotEnv();
 
