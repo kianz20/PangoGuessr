@@ -64,8 +64,8 @@ export function googleMetadataFetcher(apiKey: string, stats: SampleStats): Metad
     const url = new URL(METADATA_URL);
     url.searchParams.set('location', `${point.lat},${point.lng}`);
     url.searchParams.set('radius', String(radiusM));
-    // Official car coverage only. User photospheres are wildly inconsistent in quality and
-    // often indoors, which makes for unguessable rounds.
+    // Excludes indoor collections, but still returns user-contributed outdoor photospheres —
+    // deliberately: they're the only imagery in places like China, Egypt and the Pacific.
     url.searchParams.set('source', 'outdoor');
     url.searchParams.set('key', apiKey);
 
