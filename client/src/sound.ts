@@ -17,7 +17,8 @@ export type Cue =
   | 'land'
   | 'step'
   | 'drumroll'
-  | 'fanfare';
+  | 'fanfare'
+  | 'busted';
 
 const KEY = 'pangoguessr.sound';
 /** Quiet: a phone speaker at full volume in a small room is plenty. */
@@ -99,6 +100,11 @@ export function play(cue: Cue, { step = 0 }: { step?: number } = {}): void {
       [523.25, 659.25, 783.99, 1046.5].forEach((f) =>
         note(ctx, f, t + 0.48, 0.9, { type: 'sine', gain: 0.18 }),
       );
+      return;
+    case 'busted':
+      // A game-show "wrong answer": two sagging buzzes.
+      note(ctx, 233, t, 0.32, { type: 'sawtooth', gain: 0.18, slideTo: 196 });
+      note(ctx, 196, t + 0.36, 0.6, { type: 'sawtooth', gain: 0.18, slideTo: 131 });
       return;
   }
 }

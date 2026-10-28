@@ -53,6 +53,8 @@ let pumping = false;
 let lot: HTMLDivElement | null = null;
 /** Told whenever a panorama settles, for the lobby's ready tick. */
 const settledListeners = new Set<() => void>();
+/** Told whenever someone goes for Google's link out to Maps. */
+const cheatListeners = new Set<() => void>();
 
 /** No event says a panorama's tiles have arrived, so give them a moment once it's accepted. */
 const TILE_SETTLE_MS = 2_000;
@@ -115,6 +117,12 @@ export function onPanoramaSettled(listener: () => void): () => void {
   return () => settledListeners.delete(listener);
 }
 
+/** Someone tried to open the view in Google Maps. */
+export function onCheatAttempt(listener: () => void): () => void {
+  cheatListeners.add(listener);
+  return () => cheatListeners.delete(listener);
+}
+
 /**
  * One at a time, in round order, so the next round's panorama gets the whole connection
  * instead of sharing it with every round after it.
@@ -145,6 +153,21 @@ async function settled(entry: Entry): Promise<void> {
 function open(panoId: string): Entry {
   const element = document.createElement('div');
   element.style.cssText = 'position:absolute;inset:0';
+  // Google's links out to Maps give the location away. They have to stay visible, but nothing
+  // says they have to work: a tap, a middle click, a right click or Enter on a tabbed-to link
+  // goes nowhere, and the round screen makes an example of whoever tried.
+  for (const type of ['click', 'auxclick', 'contextmenu']) {
+    element.addEventListener(
+      type,
+      (event) => {
+        if (!(event.target as Element).closest('a[href]')) return;
+        event.preventDefault();
+        (document.activeElement as HTMLElement | null)?.blur();
+        for (const listener of cheatListeners) listener();
+      },
+      true,
+    );
+  }
   parkingLot().appendChild(element);
 
   const entry: Entry = {

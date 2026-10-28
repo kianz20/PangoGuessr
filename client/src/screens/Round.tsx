@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { GuessProgress, LatLng } from '@pangoguessr/shared';
 import { CancelGame } from '../components/CancelGame';
 import { GuessMap } from '../components/GuessMap';
+import { NoCheating } from '../components/NoCheating';
 import { PanoramaView } from '../components/PanoramaView';
+import { onCheatAttempt } from '../panoramas';
 import { play } from '../sound';
 import type { RoundView } from '../useRoom';
 
@@ -59,6 +61,10 @@ export function Round({
   const [timeUp, setTimeUp] = useState(false);
   /** Only for a round starting fresh. A reconnect mid-round goes straight back to it. */
   const [intro, setIntro] = useState(() => round.startedAt === null && !round.youGuessed);
+  /** Caught going for Google's link out to Maps: locked out for a few seconds. */
+  const [busted, setBusted] = useState(false);
+
+  useEffect(() => onCheatAttempt(() => setBusted(true)), []);
 
   /**
    * The latest round, for the clock's interval. Its start and the room's deadline live in
@@ -265,6 +271,8 @@ export function Round({
           </p>
         </div>
       )}
+
+      {busted && <NoCheating onDone={() => setBusted(false)} />}
     </main>
   );
 }
