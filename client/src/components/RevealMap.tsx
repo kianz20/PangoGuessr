@@ -4,9 +4,7 @@ import type { GuessResult, LatLng } from '@pangoguessr/shared';
 import { prefersReducedMotion } from '../motion';
 import { initials, type ColorOf } from '../players';
 import { play } from '../sound';
-
-const OSM_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-const OSM_ATTRIBUTION = '© OpenStreetMap';
+import { baseTiles } from './mapTiles';
 
 /** The reveal's beats: a short beat on the answer, then the pins one by one. */
 const FOCUS_MS = 400;
@@ -86,7 +84,7 @@ export function RevealMap({
     if (!host) return;
 
     const map = L.map(host, { zoomControl: true, worldCopyJump: true });
-    L.tileLayer(OSM_URL, { attribution: OSM_ATTRIBUTION }).addTo(map);
+    baseTiles().addTo(map);
 
     const timers: number[] = [];
     const later = (fn: () => void, ms: number) => timers.push(window.setTimeout(fn, ms));

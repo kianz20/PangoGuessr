@@ -727,8 +727,9 @@ Movement, separately, really wants 90+ second rounds to be worth having.
 
 ### Guess map (independent of the above)
 
-**Leaflet + OpenStreetMap tiles.** Free, and no reason to pay Google on both halves of
-the screen. On a phone it sits small in the corner of the panorama and a tap opens it over
+**Leaflet + Esri World Street Map tiles.** Free, and no reason to pay Google on both halves
+of the screen. Not OpenStreetMap's own tiles: those label places in their local script, and a
+guessing map needs to be readable everywhere — Esri labels in English. On a phone it sits small in the corner of the panorama and a tap opens it over
 the whole stage; placing a pin only happens on the open map, never on one too small to aim
 at. After Confirm it drops back to the corner, read-only, still showing the pin.
 

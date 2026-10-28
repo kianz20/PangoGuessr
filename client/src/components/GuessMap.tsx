@@ -2,9 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import type { LatLng } from '@pangoguessr/shared';
 import { GUESS_PIN } from './mapPin';
-
-const OSM_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-const OSM_ATTRIBUTION = '© OpenStreetMap';
+import { baseTiles } from './mapTiles';
 
 /**
  * Trimmed of the empty polar caps, so "the whole world" doesn't waste half the screen.
@@ -21,7 +19,7 @@ const WORLD = L.latLngBounds([-58, -179], [78, 179]);
  */
 const PAN_LIMIT = L.latLngBounds([-85, -720], [85, 720]);
 
-/** Leaflet + OSM tiles — free, and no reason to pay Google on both halves of the screen (§7). */
+/** Leaflet + free tiles — no reason to pay Google on both halves of the screen (§7). */
 export function GuessMap({
   pin,
   onPin,
@@ -74,8 +72,7 @@ export function GuessMap({
     // running out of map. The whole world in the ~150px corner map is zoom −0.8, below the
     // tile source's lowest level; without minNativeZoom the layer draws the zoom-0 tile unscaled
     // and the corner shows only the mid-Atlantic.
-    L.tileLayer(OSM_URL, {
-      attribution: OSM_ATTRIBUTION,
+    baseTiles({
       noWrap: false,
       minZoom: -3,
       minNativeZoom: 0,

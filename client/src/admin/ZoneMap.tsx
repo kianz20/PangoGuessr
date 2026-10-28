@@ -1,12 +1,11 @@
 import { useEffect, useRef } from 'react';
 import L from 'leaflet';
+import { baseTiles } from '../components/mapTiles';
 
 export type Bbox = [south: number, west: number, north: number, east: number];
 
 export type ZoneShape = { id: string; name: string; bbox: Bbox; groupId: string };
 export type TestHit = { lat: number; lng: number };
-
-const OSM_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 
 /**
  * Drag on the map to draw a zone; existing zones render as rectangles you can click to
@@ -49,7 +48,7 @@ export function ZoneMap({
       // zone — leaving it on meant every box you drew also zoomed the map into it.
       boxZoom: false,
     });
-    L.tileLayer(OSM_URL, { attribution: '© OpenStreetMap' }).addTo(map);
+    baseTiles().addTo(map);
     shapesRef.current = L.layerGroup().addTo(map);
     hitsRef.current = L.layerGroup().addTo(map);
     mapRef.current = map;

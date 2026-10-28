@@ -2,9 +2,7 @@ import { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import type { LatLng, RoundSummary } from '@pangoguessr/shared';
 import { prefersReducedMotion } from '../motion';
-
-const OSM_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-const OSM_ATTRIBUTION = '© OpenStreetMap';
+import { baseTiles } from './mapTiles';
 
 const FIT: L.FitBoundsOptions = { padding: [28, 28], maxZoom: 9 };
 const PIN = 24;
@@ -31,7 +29,7 @@ export function RecapMap({
     const host = hostRef.current;
     if (!host) return;
     const map = L.map(host, { zoomControl: true, worldCopyJump: true, zoomSnap: 0.25 });
-    L.tileLayer(OSM_URL, { attribution: OSM_ATTRIBUTION }).addTo(map);
+    baseTiles().addTo(map);
 
     for (const round of rounds) {
       const number = String(round.roundIndex + 1);
