@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { RECONNECT_GRACE_MS, ROUNDS_PER_GAME, ROUND_MS, scoreGuess } from '@pangoguessr/shared';
+import {
+  AUTO_ADVANCE_MS,
+  RECONNECT_GRACE_MS,
+  ROUNDS_PER_GAME,
+  ROUND_MS,
+  scoreGuess,
+} from '@pangoguessr/shared';
 import type { ServerMessage } from '@pangoguessr/shared';
 import type { LocationSource, RoundLocation } from '../src/locationSource';
 import { RoomStore, type Conn, type Scheduler } from '../src/rooms';
@@ -115,7 +121,9 @@ test('the round ends as soon as every active player has guessed', () => {
 
   store.submitGuess(guests[1]!.conn, 10, 10, 7_000);
   assert.equal(room.phase, 'ROUND_RESULTS', 'last guess closes the round immediately');
-  assert.equal(clock.pendingCount, 0, 'and cancels the backstop rather than leaking a timer');
+  // The backstop is cancelled rather than leaked; what's left is the results countdown.
+  assert.equal(clock.pendingCount, 1, 'only the results countdown is armed');
+  assert.equal(clock.lastDelay, AUTO_ADVANCE_MS);
 });
 
 /** The test §5 explicitly asks for. */
@@ -134,7 +142,8 @@ test('a player disconnecting mid-round does not stop the round from ending', () 
 
   clock.fireLatest();
   assert.equal(room.phase, 'ROUND_RESULTS', 'once that runs out, the remaining two are enough');
-  assert.equal(clock.pendingCount, 0, 'the backstop went with it');
+  assert.equal(clock.pendingCount, 1, 'the backstop went with it, leaving the results countdown');
+  assert.equal(clock.lastDelay, AUTO_ADVANCE_MS);
   const end = host.conn.lastOfType('roundEnd');
   assert.ok(end);
   const absent = end.results.find((r) => r.playerId === guests[1]!.player.id);
@@ -540,6 +549,80 @@ test('a failed deal leaves the lobby able to try again at Start', async () => {
   const start = store.startRound(hostConn);
   assert.equal(start.ok, false);
   if (!start.ok) assert.equal(start.code, 'LOCATIONS_NOT_READY', 'an honest refusal, not a hang');
+});
+
+test('the results screen moves on by itself, with the countdown in every roomState', () => {
+  const { store, room, clock, host, guests } = setup(['A']);
+  store.startRound(host.conn);
+  assert.equal(guests[0]!.conn.lastOfType('roomState')!.advanceInMs, undefined, 'none mid-round');
+
+  store.submitGuess(host.conn, 0, 0, 0);
+  store.submitGuess(guests[0]!.conn, 1, 1, 0);
+  assert.equal(room.phase, 'ROUND_RESULTS');
+  const state = guests[0]!.conn.lastOfType('roomState')!;
+  assert.equal(state.phase, 'ROUND_RESULTS');
+  assert.equal(state.advanceInMs, AUTO_ADVANCE_MS, 'every phone starts the same countdown');
+
+  clock.fireLatest();
+  assert.equal(room.phase, 'ROUND_ACTIVE', 'the next round, with nobody pressing anything');
+  assert.equal(room.roundIndex, 1);
+  assert.ok(guests[0]!.conn.lastOfType('roundStart'));
+  assert.equal(guests[0]!.conn.lastOfType('roomState')!.advanceInMs, undefined);
+  assert.equal(clock.pendingCount, 1, 'just the new round’s backstop');
+});
+
+test('after the last round the countdown goes to the podium, and stops there', () => {
+  const { store, room, clock, host, guests } = setup(['A']);
+  store.startRound(host.conn);
+  for (let round = 0; round < ROUNDS_PER_GAME; round++) {
+    store.submitGuess(host.conn, 0, 0, 0);
+    store.submitGuess(guests[0]!.conn, 1, 1, 0);
+    assert.equal(room.phase, 'ROUND_RESULTS');
+    clock.fireLatest();
+  }
+
+  assert.equal(room.phase, 'GAME_OVER');
+  assert.ok(guests[0]!.conn.lastOfType('gameEnd'));
+  assert.equal(guests[0]!.conn.lastOfType('roomState')!.phase, 'GAME_OVER');
+  // Play again is a choice, not a countdown.
+  assert.equal(clock.pendingCount, 0, 'nothing moves the podium on');
+});
+
+test('the host skipping ahead cancels the countdown, so the room never moves twice', () => {
+  const { store, room, clock, host, guests } = setup(['A']);
+  store.startRound(host.conn);
+  store.submitGuess(host.conn, 0, 0, 0);
+  store.submitGuess(guests[0]!.conn, 1, 1, 0);
+
+  assert.ok(store.advance(host.conn).ok);
+  assert.equal(room.roundIndex, 1);
+  assert.equal(clock.pendingCount, 1, 'only the new round’s backstop');
+  assert.equal(clock.lastDelay, 46_000);
+});
+
+test('cancelling from the results screen stops the countdown', () => {
+  const { store, room, clock, host, guests } = setup(['A']);
+  store.startRound(host.conn);
+  store.submitGuess(host.conn, 0, 0, 0);
+  store.submitGuess(guests[0]!.conn, 1, 1, 0);
+  assert.equal(clock.pendingCount, 1);
+
+  assert.ok(store.cancelGame(host.conn).ok);
+  assert.equal(room.phase, 'LOBBY');
+  assert.equal(clock.pendingCount, 0, 'no round starts in the lobby');
+});
+
+test('a room closed on the results screen does not go on to start a round', () => {
+  const { store, room, clock, host, guests } = setup(['A']);
+  store.startRound(host.conn);
+  store.submitGuess(host.conn, 0, 0, 0);
+  store.submitGuess(guests[0]!.conn, 1, 1, 0);
+
+  const t0 = Date.now();
+  store.disconnect(host.conn, t0);
+  store.sweep(t0 + 31_000);
+  assert.equal(store.get(room.code), undefined, 'the host left, so the room closed');
+  assert.equal(clock.pendingCount, 0, 'and took its countdown with it');
 });
 
 test('only the host can advance, and not from the wrong phase', () => {

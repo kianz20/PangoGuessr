@@ -35,6 +35,7 @@ function Game() {
     round,
     results,
     final,
+    advanceAt,
     rankDeltas,
     linkDownSince,
     renameError,
@@ -109,6 +110,7 @@ function Game() {
         totalRounds={room.totalRounds}
         rankDeltas={rankDeltas}
         colorOf={colorOf}
+        advanceAt={advanceAt}
         onAdvance={advance}
         onCancelGame={cancelGame}
       />

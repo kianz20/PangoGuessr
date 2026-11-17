@@ -4,7 +4,7 @@ A GeoGuessr-style party game for a room full of phones. See [ARCHITECTURE.md](AR
 for the design and the reasoning behind it — this file is just how to run it.
 
 **Status:** steps 1–5 of the build order (§10). Playable end to end: lobby → 5 rounds →
-host-gated results → podium → play again, with reconnect at every phase.
+6-second results countdown → podium → play again, with reconnect at every phase.
 
 Imagery is **key-gated**. With `GOOGLE_MAPS_*` keys set you get real Street View sampled from
 the weighted zones in [server/src/zones.ts](server/src/zones.ts); without them the game falls

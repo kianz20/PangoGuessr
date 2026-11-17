@@ -1,5 +1,5 @@
-import { useMemo, useRef } from 'react';
-import { rankByScore } from '@pangoguessr/shared';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { AUTO_ADVANCE_MS, rankByScore } from '@pangoguessr/shared';
 import type { GuessResult, LeaderboardRow } from '@pangoguessr/shared';
 import { Avatar } from '../components/Avatar';
 import { Awards, type Award } from '../components/Awards';
@@ -84,6 +84,7 @@ export function Results({
   totalRounds,
   rankDeltas,
   colorOf,
+  advanceAt,
   onAdvance,
   onCancelGame,
 }: {
@@ -93,6 +94,8 @@ export function Results({
   totalRounds: number;
   rankDeltas: Record<string, number>;
   colorOf: ColorOf;
+  /** When the room moves on by itself, on this device's clock. Null until the state says. */
+  advanceAt: number | null;
   onAdvance: () => void;
   onCancelGame: () => void;
 }) {
@@ -205,25 +208,61 @@ export function Results({
         (CC BY 4.0)
       </p>
 
-      {/* Sticky: the whole room is waiting on this button, so the host must never have to
+      {/* Sticky: the countdown is what the whole room is watching, so nobody should have to
           scroll to find it. */}
       <footer className="results__actions results__actions--sticky">
-        {isHost ? (
+        <NextIn at={advanceAt} label={results.isFinalRound ? 'Podium' : 'Next round'} />
+        {isHost && (
           // Only the host's client renders these, and the server re-checks isHost anyway (§4).
+          // Skipping is optional: the room moves on by itself when the countdown runs out.
           <div className="results__buttons">
-            <button className="button button--primary" type="button" onClick={onAdvance}>
-              {results.isFinalRound ? 'See the podium' : 'Next round'}
+            <button className="button button--ghost" type="button" onClick={onAdvance}>
+              {results.isFinalRound ? 'Podium now' : 'Next round now'}
             </button>
             <CancelGame onCancel={onCancelGame} />
           </div>
-        ) : (
-          <p className="hint">
-            Waiting for the host to
-            {results.isFinalRound ? ' show the podium.' : ' start the next round.'}
-          </p>
         )}
       </footer>
     </main>
+  );
+}
+
+/** Matches the bar's 200ms width transition, so it glides rather than steps. */
+const TICK_MS = 200;
+
+/**
+ * The room's countdown to the next screen (§4). The server owns the timer; this only draws
+ * it. Full until the state arrives, and held at empty if the next screen is a moment late.
+ */
+function NextIn({ at, label }: { at: number | null; label: string }) {
+  const remainingAt = (now: number) =>
+    at === null ? AUTO_ADVANCE_MS : Math.min(AUTO_ADVANCE_MS, Math.max(0, at - now));
+  const [remainingMs, setRemainingMs] = useState(() => remainingAt(Date.now()));
+
+  useEffect(() => {
+    setRemainingMs(remainingAt(Date.now()));
+    if (at === null) return;
+    const tick = window.setInterval(() => setRemainingMs(remainingAt(Date.now())), TICK_MS);
+    return () => window.clearInterval(tick);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [at]);
+
+  const seconds = Math.ceil(remainingMs / 1000);
+  return (
+    <div className="next-in" role="timer" aria-label={`${label} in ${seconds} seconds`}>
+      <p className="next-in__text" aria-hidden>
+        {seconds > 0 ? (
+          <>
+            {label} in <span className="next-in__seconds">{seconds}</span>
+          </>
+        ) : (
+          `${label}…`
+        )}
+      </p>
+      <div className="timer" aria-hidden>
+        <div className="timer__fill" style={{ width: `${(remainingMs / AUTO_ADVANCE_MS) * 100}%` }} />
+      </div>
+    </div>
   );
 }
 

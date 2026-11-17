@@ -16,6 +16,8 @@ const PIN = 26;
 const YOU_PIN = 32;
 
 const FIT: L.FitBoundsOptions = { padding: [36, 36], maxZoom: 12 };
+/** Past the fit, a further 15% magnification. Zoom levels are powers of 2. */
+const ZOOM_IN = Math.log2(1.15);
 
 const ANSWER_PIN = L.divIcon({
   className: 'pin-marker pin-marker--answer',
@@ -103,6 +105,11 @@ export function RevealMap({
     // Nobody guessed: a fit on the answer alone would zoom to street level, which reads as a bug.
     if (guesses.length === 0) map.setView(actual, 5, { animate: false });
     else map.fitBounds(bounds, { ...FIT, animate: false });
+    // Then a little closer, about the middle of the fit: the outermost pins move into the
+    // padding rather than off the edge, as they did when this zoomed in on the answer. The fit
+    // itself stays on whole levels; only this nudge needs fractional zoom.
+    map.options.zoomSnap = 0;
+    map.setZoom(map.getZoom() + ZOOM_IN, { animate: false });
 
     const drop = (result: Guessed) => {
       const isYou = result.playerId === youId;

@@ -86,6 +86,11 @@ export function useRoom(initialIntent: Intent | null = null) {
   const [round, setRound] = useState<RoundView | null>(null);
   const [results, setResults] = useState<ResultsView | null>(null);
   const [final, setFinal] = useState<FinalView | null>(null);
+  /**
+   * When the results screen moves on by itself, on this device's clock. Re-based on every
+   * `roomState`, so a reconnect takes the room's countdown rather than trusting its own.
+   */
+  const [advanceAt, setAdvanceAt] = useState<number | null>(null);
   /** Positive means they moved up the board since the previous round. */
   const [rankDeltas, setRankDeltas] = useState<Record<string, number>>({});
   /**
@@ -168,6 +173,7 @@ export function useRoom(initialIntent: Intent | null = null) {
       setRound(null);
       setResults(null);
       setFinal(null);
+      setAdvanceAt(null);
       setLinkDownSince(null);
       setRenameError(null);
       setNotice(message);
@@ -253,6 +259,7 @@ export function useRoom(initialIntent: Intent | null = null) {
         connection.joined();
         revRef.current = msg.rev;
         setRoom(msg);
+        setAdvanceAt(msg.advanceInMs === undefined ? null : Date.now() + msg.advanceInMs);
         setNotice(null);
         setLinkDownSince(null);
         setStatus('inRoom');
@@ -589,6 +596,7 @@ export function useRoom(initialIntent: Intent | null = null) {
     round,
     results,
     final,
+    advanceAt,
     rankDeltas,
     linkDownSince,
     renameError,

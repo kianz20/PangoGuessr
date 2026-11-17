@@ -18,6 +18,13 @@ export const ROOM_BACKSTOP_MS = ROUND_MS + LOAD_HEADROOM_MS;
  */
 export const CLOCK_SLACK_MS = 1_500;
 
+/**
+ * How long the results screen stays up before the room moves on by itself — to the next round,
+ * or to the podium after the last (§4). Counted from the round ending, reveal included. The
+ * host can still skip ahead.
+ */
+export const AUTO_ADVANCE_MS = 6_000;
+
 export const MAX_PLAYERS = 20;
 
 export const MAX_NAME_LENGTH = 16;

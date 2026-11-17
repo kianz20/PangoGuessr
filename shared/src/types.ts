@@ -68,6 +68,12 @@ export type RoomStateMsg = {
   panoIds: string[];
   round?: RoundSnapshot;
   /**
+   * On the results screen: how long until the room moves on by itself (§4). Relative, like
+   * `RoundSnapshot.remainingMs`, so no clock skew creeps into the countdown. Absent in every
+   * other phase.
+   */
+  advanceInMs?: number;
+  /**
    * Which state this is: the room counts every `roomState` it sends. The heartbeat's `pong`
    * carries the room's latest, so a phone that missed one — for any reason — finds out within
    * a beat and asks again, instead of sitting on a screen the room has left (§3).

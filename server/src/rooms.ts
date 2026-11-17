@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  AUTO_ADVANCE_MS,
   CLOCK_SLACK_MS,
   CLOSE_REPLACED,
   CODE_ALPHABET,
@@ -129,6 +130,11 @@ export type Room = {
   /** A deal is waiting on the pool to refill. */
   dealing: boolean;
   round: ActiveRound | null;
+  /**
+   * The results screen's countdown: when it runs out the room moves on without the host (§4).
+   * Set only in ROUND_RESULTS.
+   */
+  autoAdvance: { handle: unknown; at: number } | null;
   /** This game's finished rounds, for the podium's recap. Cleared when a game starts or ends. */
   history: RoundSummary[];
   /** Kept so a player reconnecting into ROUND_RESULTS or GAME_OVER sees the screen (§4). */
@@ -207,6 +213,7 @@ export class RoomStore {
       deck: [],
       dealing: false,
       round: null,
+      autoAdvance: null,
       history: [],
       lastMessage: null,
       rev: 0,
@@ -443,7 +450,10 @@ export class RoomStore {
     if (!this.maybeEndRound(room, now)) this.broadcastProgress(room, now);
   }
 
-  /** Host only. Leaves ROUND_RESULTS for the next round, or the podium for a new lobby. */
+  /**
+   * Host only. Leaves ROUND_RESULTS ahead of its countdown — the room would move on by itself
+   * shortly anyway — or the podium for a new lobby.
+   */
   advance(conn: Conn, now = Date.now()): Result {
     const located = this.locate(conn);
     if (!located) return fail('BAD_MESSAGE', 'You are not in a room.');
@@ -452,24 +462,7 @@ export class RoomStore {
     if (!player.isHost) return fail('NOT_HOST', 'Only the host can move the game on.');
 
     if (room.phase === 'ROUND_RESULTS') {
-      const nextIndex = room.roundIndex + 1;
-      if (nextIndex >= ROUNDS_PER_GAME) {
-        room.phase = 'GAME_OVER';
-        room.round = null;
-        const message: ServerMessage = {
-          type: 'gameEnd',
-          leaderboard: this.leaderboard(room),
-          rounds: room.history,
-        };
-        room.lastMessage = message;
-        this.broadcast(room, message);
-        // Without the phase change, every phone sat on the results phase with no results to
-        // draw — "Scoring the round" — until its 1.5s resync asked again.
-        this.broadcastState(room, now);
-      } else {
-        this.beginRound(room, nextIndex, now);
-      }
-      this.touch(room, now);
+      this.leaveResults(room, now);
       return { ok: true, room, player };
     }
 
@@ -505,8 +498,9 @@ export class RoomStore {
     if (room.phase === 'LOBBY') return fail('WRONG_PHASE', 'There is no game to cancel.');
 
     // Leaving these armed would fire into an idle lobby and try to end a round that no
-    // longer exists.
+    // longer exists, or start one nobody asked for.
     if (room.round) this.stopRoundTimers(room.round);
+    this.cancelAutoAdvance(room);
 
     room.phase = 'LOBBY';
     room.roundIndex = 0;
@@ -570,6 +564,56 @@ export class RoomStore {
         room.deck = dealt;
         this.broadcastState(room);
       });
+  }
+
+  /**
+   * Out of ROUND_RESULTS: the next round, or the podium after the last. Reached from the
+   * countdown running out or from the host skipping it, whichever comes first.
+   */
+  private leaveResults(room: Room, now: number): void {
+    if (room.phase !== 'ROUND_RESULTS') return;
+    this.cancelAutoAdvance(room);
+
+    const nextIndex = room.roundIndex + 1;
+    if (nextIndex >= ROUNDS_PER_GAME) {
+      room.phase = 'GAME_OVER';
+      room.round = null;
+      const message: ServerMessage = {
+        type: 'gameEnd',
+        leaderboard: this.leaderboard(room),
+        rounds: room.history,
+      };
+      room.lastMessage = message;
+      this.broadcast(room, message);
+      // Without the phase change, every phone sat on the results phase with no results to
+      // draw — "Scoring the round" — until its 1.5s resync asked again.
+      this.broadcastState(room, now);
+    } else {
+      this.beginRound(room, nextIndex, now);
+    }
+    this.touch(room, now);
+  }
+
+  /**
+   * The results screen moves on by itself, so the host needn't (§4). Owned by the server
+   * rather than the host's phone, which may well be locked in a pocket by now.
+   */
+  private armAutoAdvance(room: Room, now: number): void {
+    this.cancelAutoAdvance(room);
+    const entry: { handle: unknown; at: number } = { handle: null, at: now + AUTO_ADVANCE_MS };
+    entry.handle = this.scheduler.schedule(() => {
+      // Superseded, skipped, cancelled, or the room has closed since.
+      if (room.autoAdvance !== entry || this.rooms.get(room.code) !== room) return;
+      room.autoAdvance = null;
+      // Never earlier than `at`, even when a test fires the timer without waiting for it.
+      this.leaveResults(room, Math.max(Date.now(), entry.at));
+    }, AUTO_ADVANCE_MS);
+    room.autoAdvance = entry;
+  }
+
+  private cancelAutoAdvance(room: Room): void {
+    if (room.autoAdvance) this.scheduler.cancel(room.autoAdvance.handle);
+    room.autoAdvance = null;
   }
 
   private beginRound(room: Room, index: number, now: number): void {
@@ -719,8 +763,10 @@ export class RoomStore {
     };
     room.round = null;
     room.lastMessage = message;
+    // Armed before the state goes out, so every phone's countdown starts with the screen.
+    this.armAutoAdvance(room, now);
     this.broadcast(room, message);
-    this.broadcastState(room);
+    this.broadcastState(room, now);
     this.touch(room, now);
   }
 
@@ -853,6 +899,11 @@ export class RoomStore {
       // Panorama IDs only. The rest of each RoundLocation is the answer (§3).
       panoIds: room.deck.map((location) => location.panoId),
       ...(room.round ? { round: this.roundSnapshot(room, player, now) } : {}),
+      ...(room.autoAdvance
+        ? {
+            advanceInMs: Math.min(AUTO_ADVANCE_MS, Math.max(0, room.autoAdvance.at - now)),
+          }
+        : {}),
       rev: room.rev,
     };
   }
@@ -910,6 +961,9 @@ export class RoomStore {
   }
 
   private closeRoom(room: Room, reason: RoomClosedReason): void {
+    // A closed room must not go on to end a round or start the next one for nobody.
+    if (room.round) this.stopRoundTimers(room.round);
+    this.cancelAutoAdvance(room);
     for (const player of room.players.values()) {
       if (!player.conn) continue;
       player.conn.send({ type: 'roomClosed', reason });

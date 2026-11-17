@@ -562,6 +562,36 @@ body {
   flex: 1;
 }
 
+/* Solid behind the countdown's text, which is unreadable over a card scrolling beneath it;
+   only a thin fade is left above. */
+.screen--results .results__actions--sticky {
+  background: linear-gradient(to top, var(--bg) calc(100% - 12px), transparent);
+}
+
+/* The room's countdown out of the results screen — the same bar as the round's clock. */
+.next-in {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.next-in__text {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+.next-in__seconds {
+  display: inline-block;
+  min-width: 1ch;
+  color: var(--text);
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.1rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .round__clock--urgent {
   color: var(--warn);
 }

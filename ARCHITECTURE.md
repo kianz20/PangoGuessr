@@ -163,10 +163,10 @@ lives in `client/src/connection.ts`, which knows nothing about the game.
 ```
 LOBBY  ──startRound──▶  ROUND_ACTIVE  ──all guessed, else 46s──▶  ROUND_RESULTS
                               ▲                                      │
-                              └──────────── advance ─────────────────┤
+                              └──────── 6s, or host skips ───────────┤
                                        (rounds remain)               │
                                                                      │
-                                        advance on final round ──▶ GAME_OVER ──▶ LOBBY
+                                   6s on final round, or skip ──▶ GAME_OVER ──advance──▶ LOBBY
 ```
 
 `phase` lives on the room and is included in every `roomState`. A reconnecting player is
@@ -181,11 +181,19 @@ latecomer starts on 0 (unwinnable) or on the current average (unfair).
 Reconnects are exempt — a known `sessionId` rejoining is restoring an existing player, not
 joining, and must always be allowed through the lock (§8).
 
-### ROUND_RESULTS — host-gated
+### ROUND_RESULTS — a 6-second countdown
 
-After every round, **all players sit on a results screen until the host presses "Next."**
-There is no auto-advance countdown. The whole point is to give the room time to react to
-the reveal and argue about it, which is most of the fun of playing in person.
+After every round, **all players see a results screen for 6 seconds, then the room moves on
+by itself** — to the next round, or to the podium after the last. Every phone shows the
+countdown as a draining bar. The host can skip ahead with "Next round now", but never has
+to: originally this phase waited on the host's "Next" button, which made the host's phone
+the bottleneck for the whole room.
+
+The timer is the server's, armed when the round ends and cancelled by a skip, a cancelled
+game or a closed room. `roomState` carries `advanceInMs` while it's running — relative, like
+the round's `remainingMs`, so a phone's clock skew can't creep into the countdown, and a
+reconnect picks up the room's countdown rather than starting a fresh one. The podium has no
+countdown: "Play again" is still the host's call.
 
 The screen shows the actual location on a map with **every player's guess pin**, each
 labelled with their name, plus their distance and points for the round, and the running
@@ -197,13 +205,14 @@ include the answer and all pins, cluster or shrink labels when pins overlap, and
 player tap their own pin to highlight it. Make the map the dominant element on this
 screen, with the leaderboard scrolling beneath it.
 
-Only the host's client renders the Next button, but **the server must independently
+Only the host's client renders the skip button, but **the server must independently
 re-check `isHost` on `advance`** — never trust a hidden button as an authorisation
 mechanism.
 
 ### GAME_OVER — the podium
 
-After the fifth round's results, `advance` goes to `GAME_OVER` rather than another round.
+After the fifth round's results, the countdown (or a skip) goes to `GAME_OVER` rather than
+another round.
 
 This screen leads with a **podium of the top 3** — 1st centre and tallest, 2nd left, 3rd
 right, with final totals. It's the payoff for the whole game and should feel like an
@@ -274,9 +283,8 @@ reconnects inside that window resumes with `isHost` intact — `isHost` lives on
 record, which is keyed by `sessionId` (§8), so this falls out of the normal reconnect path.
 
 This is blunt, and deliberately so: it costs the group a rematch in a rare case, and it
-removes host promotion, orphaned-room cleanup and a results-screen auto-advance backstop
-from the design entirely. If it proves annoying in practice, host promotion on disconnect
-is the upgrade path.
+removes host promotion and orphaned-room cleanup from the design entirely. If it proves
+annoying in practice, host promotion on disconnect is the upgrade path.
 
 ## 5. The 40-second round
 
@@ -856,7 +864,7 @@ for the current design.
 1. **Lobby only.** Create/join room, QR + code, player list syncing over WS, reconnect
    via `sessionId`. No game at all.
 2. **Round loop** with a hardcoded list of ~20 hand-picked coordinates. Full
-   guess → 40s timer → host-gated results → next round cycle.
+   guess → 40s timer → results → next round cycle.
 3. **Random coordinates** with metadata validation (§7).
 4. **Polish.** Timer UI, reveal map with all pins, top-3 podium, kick/leave.
 5. **Admin zone editor** (§7) — once hand-tuning the starter zones becomes the bottleneck.
@@ -882,7 +890,8 @@ miserable.
 
 - [x] ~~Imagery provider~~ — **Google Street View**, §7
 - [x] ~~Room size cap~~ — **20 players**
-- [x] ~~Round advance~~ — **host-gated, no auto-advance**, §4
+- [x] ~~Round advance~~ — **automatic after a 6s countdown; the host can skip**, §4
+  (was host-gated)
 - [x] ~~When does the 40s start?~~ — **on each client's own panorama render**, §5
 - [x] ~~Load headroom~~ — **6s (46s backstop)**, §5
 - [x] ~~Rounds per game~~ — **5**, §1
@@ -920,8 +929,8 @@ architecture would need revisiting if it turns out to be wrong.
 
 **Product**
 
-- Players are in the same physical room, talking to each other. This is why results are
-  host-gated rather than timed, and why a 4-character spoken code is useful at all. If
+- Players are in the same physical room, talking to each other. This is why a
+  4-character spoken code is useful at all. If
   it's ever played remotely, the whole pacing model changes.
 - The host is a player, not a dedicated operator — they need to be able to guess *and*
   drive the room.
